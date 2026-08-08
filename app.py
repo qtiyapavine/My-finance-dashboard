@@ -28,9 +28,9 @@ with st.sidebar:
     st.header("⚙️ Data Connections")
     st.caption("Paste your published Google Sheet CSV links below:")
     
-    stocks_csv = st.text_input("📈 Stocks Sheet CSV URL")
-    bonds_csv = st.text_input("📜 FDs & Bonds Sheet CSV URL")
-    income_csv = st.text_input("💵 Income Sheet CSV URL")
+    stocks_csv = "https://docs.google.com/spreadsheets/d/e/YOUR_STOCKS_LINK/pub?output=csv"
+    bonds_csv = "https://docs.google.com/spreadsheets/d/e/YOUR_BONDS_LINK/pub?output=csv"
+    income_csv = "https://docs.google.com/spreadsheets/d/e/YOUR_INCOME_LINK/pub?output=csv"
     
     st.markdown("---")
     st.info("💡 Changes made in your Google Sheet will auto-reflect here on refresh!")
