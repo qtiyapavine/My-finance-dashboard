@@ -7,7 +7,7 @@ import plotly.express as px
 # 1. HARDCODED GOOGLE SHEET CSV LINKS
 # Replace the URLs inside the quotes with your actual published CSV links
 # ----------------------------------------------------
-STOCKS_CSV = "PASTE_YOUR_STOCKS_CSV_URL_HERE"
+STOCKS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=0&single=true&output=csv"
 BONDS_CSV = "PASTE_YOUR_BONDS_CSV_URL_HERE"
 INCOME_CSV = "PASTE_YOUR_INCOME_CSV_URL_HERE"
 
