@@ -146,7 +146,7 @@ tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs([
     "📊 Overall Summary", "📈 Stocks Portfolio", "📜 FDs & Bonds", "💵 Income Tracker"
 ])
 
-# TAB 1: OVERALL SUMMARY (Growth starting today)
+# TAB 1: OVERALL SUMMARY
 with tab_overview:
     st.subheader("📈 Overall Daily Wealth Growth (Starting Today)")
     
@@ -174,29 +174,10 @@ with tab_overview:
         )
         st.plotly_chart(fig_donut, use_container_width=True)
 
-# TAB 2: STOCKS PORTFOLIO (With Individual Stock Chart)
+# TAB 2: STOCKS PORTFOLIO
 with tab_stocks:
     if not stocks_df.empty:
-        st.subheader("🔍 Individual Stock Price Performance Chart")
-        
-        # Dropdown to pick a stock to view its specific graph
-        selected_stock = st.selectbox("Select a stock to view its performance graph:", stocks_df['Ticker'].tolist())
-        
-        if selected_stock:
-            time_frame = st.radio("Select Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=3, horizontal=True)
-            stock_data = yf.Ticker(selected_stock).history(period=time_frame)
-            
-            if not stock_data.empty:
-                fig_stock_line = px.line(
-                    stock_data, y='Close', 
-                    title=f"Price Chart for {selected_stock}",
-                    labels={'Date': 'Date', 'Close': 'Price (₹)'}
-                )
-                fig_stock_line.update_traces(line_color='#3B82F6', line_width=2)
-                st.plotly_chart(fig_stock_line, use_container_width=True)
-        
-        st.markdown("---")
-        
+        # Overview Charts First
         col_s1, col_s2 = st.columns(2)
         with col_s1:
             fig_stock_pie = px.pie(
@@ -211,8 +192,75 @@ with tab_stocks:
             )
             st.plotly_chart(fig_stock_bar, use_container_width=True)
             
-        st.subheader("Detailed Stock Holdings Table")
+        st.subheader("📋 Detailed Stock Holdings Table")
         st.dataframe(stocks_df, use_container_width=True)
+        
+        st.markdown("---")
+        
+        # 🔍 INDIVIDUAL STOCK ANALYSIS SECTION (Below Table)
+        st.subheader("🔍 Individual Stock Deep-Dive & News")
+        
+        selected_stock = st.selectbox(
+            "Select a stock from your holdings to view its graph & corporate actions/news:", 
+            stocks_df['Ticker'].tolist()
+        )
+        
+        if selected_stock:
+            col_graph, col_news = st.columns([3, 2])
+            stock_obj = yf.Ticker(selected_stock)
+            
+            # Left Side: Individual Stock Chart
+            with col_graph:
+                time_frame = st.radio("Select Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=3, horizontal=True)
+                stock_data = stock_obj.history(period=time_frame)
+                
+                if not stock_data.empty:
+                    fig_stock_line = px.line(
+                        stock_data, y='Close', 
+                        title=f"Price Chart for {selected_stock}",
+                        labels={'Date': 'Date', 'Close': 'Price (₹)'}
+                    )
+                    fig_stock_line.update_traces(line_color='#3B82F6', line_width=2)
+                    st.plotly_chart(fig_stock_line, use_container_width=True)
+            
+            # Right Side: Scrollable Corporate Actions & News
+            with col_news:
+                st.write(f"📰 **Latest News & Events for {selected_stock}**")
+                
+                # Scrollable box container for corporate info & news
+                with st.container(height=350):
+                    # Corporate Actions (Dividends / Splits)
+                    st.markdown("#### 🎁 Corporate Actions")
+                    dividends = stock_obj.dividends
+                    splits = stock_obj.splits
+                    
+                    if not dividends.empty:
+                        last_div = dividends.iloc[-1]
+                        st.write(f"• **Latest Dividend:** ₹{last_div} (Date: {dividends.index[-1].strftime('%Y-%m-%d')})")
+                    else:
+                        st.write("• **Latest Dividend:** No recent dividends recorded.")
+                        
+                    if not splits.empty:
+                        last_split = splits.iloc[-1]
+                        st.write(f"• **Latest Stock Split:** Ratio {last_split} (Date: {splits.index[-1].strftime('%Y-%m-%d')})")
+                    else:
+                        st.write("• **Latest Stock Split:** No recent stock splits.")
+                        
+                    st.markdown("---")
+                    st.markdown("#### 🗞️ Recent Market News")
+                    
+                    # Fetch Yahoo Finance News
+                    news_list = stock_obj.news
+                    if news_list:
+                        for item in news_list[:5]: # Top 5 headlines
+                            title = item.get('title', 'No Title')
+                            publisher = item.get('publisher', 'Market News')
+                            link = item.get('link', '#')
+                            st.markdown(f"• **[{title}]({link})**")
+                            st.caption(f"Source: {publisher}")
+                    else:
+                        st.write("No headlines available right now.")
+            
     else:
         st.info("No Stocks data loaded.")
 
@@ -238,3 +286,4 @@ with tab_income:
         st.dataframe(income_df, use_container_width=True)
     else:
         st.info("No Income data loaded.")
+        
