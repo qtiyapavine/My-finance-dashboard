@@ -15,8 +15,8 @@ INCOME_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNu
 # 2. STREAMLIT PAGE CONFIGURATION
 # ----------------------------------------------------
 st.set_page_config(
-    page_title="Personal Wealth Command Center",
-    page_icon="💰",
+    page_title="Family's Overall Wealth",
+    page_icon="👨‍👩‍👧‍👦",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -31,7 +31,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("🛡️ Personal Wealth Command Center")
+st.title("👨‍👩‍👧‍👦 Family's Overall Wealth")
 
 # Sidebar Controls
 with st.sidebar:
@@ -86,7 +86,7 @@ if STOCKS_CSV:
         st.sidebar.error(f"Error loading Stocks: {e}")
 
 # ----------------------------------------------------
-# 4. DATA PROCESSING: FDs & BONDS (Monthly Payout Logic)
+# 4. DATA PROCESSING: FDs & BONDS
 # ----------------------------------------------------
 bonds_df = pd.DataFrame()
 if BONDS_CSV:
@@ -101,15 +101,15 @@ if BONDS_CSV:
             principal = float(row['Invested_Amount'])
             rate = float(row['Interest_Rate_Pct']) / 100.0
             
-            # Calculate Monthly Payout Income
+            # Monthly Payout
             monthly_income = (principal * rate) / 12.0
             monthly_payout_list.append(monthly_income)
             
-            # Calculate Total Interest Earned to Date based on Purchase_Date
+            # Calculate total months active from Purchase_Date
             if 'Purchase_Date' in row and pd.notnull(row['Purchase_Date']):
                 p_date = pd.to_datetime(row['Purchase_Date'])
                 months_active = (today.year - p_date.year) * 12 + (today.month - p_date.month)
-                months_active = max(0, months_active) # Ensure non-negative
+                months_active = max(0, months_active)
             else:
                 months_active = 0
                 
@@ -145,15 +145,15 @@ if INCOME_CSV:
                 monthly_total += (amt / 12)
             else:
                 monthly_total += amt
-        total_monthly_income = monthly_total + total_monthly_payout # Includes monthly FD payouts
+        total_monthly_income = monthly_total + total_monthly_payout
     except Exception as e:
         st.sidebar.error(f"Error loading Income: {e}")
 
-# Calculate Total Net Worth
+# Net Worth
 net_worth = total_stock_val + total_bonds_val
 stock_gain = total_stock_val - total_stock_invested
 
-# Log current wealth
+# Log wealth history
 today_str = datetime.today().strftime('%Y-%m-%d')
 history_df = st.session_state.wealth_history
 
@@ -167,9 +167,9 @@ else:
 # 6. TOP METRICS
 # ----------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("💰 Total Portfolio Value", f"₹{net_worth:,.2f}")
+m1.metric("💰 Total Family Net Worth", f"₹{net_worth:,.2f}")
 m2.metric("📈 Stocks Current Value", f"₹{total_stock_val:,.2f}", delta=f"₹{stock_gain:,.2f}")
-m3.metric("🏦 FDs & Bonds (With Earned Interest)", f"₹{total_bonds_val:,.2f}", delta=f"₹{total_bonds_earned_interest:,.2f} Earned")
+m3.metric("🏦 FDs & Bonds (Total Value)", f"₹{total_bonds_val:,.2f}", delta=f"₹{total_bonds_earned_interest:,.2f} Earned")
 m4.metric("💵 Total Monthly Cashflow", f"₹{total_monthly_income:,.2f}", delta=f"₹{total_monthly_payout:,.2f} from FDs")
 
 st.markdown("---")
@@ -183,13 +183,13 @@ tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs([
 
 # TAB 1: OVERALL SUMMARY
 with tab_overview:
-    st.subheader("📈 Overall Daily Wealth Growth (Starting Today)")
+    st.subheader("📈 Overall Family Wealth Growth")
     
     wealth_data = st.session_state.wealth_history
     if not wealth_data.empty:
         fig_wealth = px.line(
             wealth_data, x='Date', y='Total Wealth', 
-            title="Overall Wealth Trend Over Time",
+            title="Total Wealth Trend Over Time",
             markers=True
         )
         fig_wealth.update_traces(line_color='#00D4B1', line_width=3)
@@ -227,14 +227,17 @@ with tab_stocks:
             st.plotly_chart(fig_stock_bar, use_container_width=True)
             
         st.markdown("---")
-        st.subheader("📋 Detailed Stock Holdings Table")
         
-        change_period = st.radio(
-            "Select Timeframe for Price Change Column:",
-            ["1 Day", "1 Week", "1 Month", "1 Year", "5 Years"],
-            index=0,
-            horizontal=True
-        )
+        # TABLE HEADER WITH INTEGRATED DROPDOWN SELECTOR
+        col_tbl_title, col_tbl_select = st.columns([2, 1])
+        with col_tbl_title:
+            st.subheader("📋 Detailed Stock Holdings Table")
+        with col_tbl_select:
+            selected_tf = st.selectbox(
+                "Change Column Timeframe:",
+                ["1 Day", "1 Week", "1 Month", "1 Year", "5 Years"],
+                index=0
+            )
         
         period_map = {"1 Day": "2d", "1 Week": "5d", "1 Month": "1mo", "1 Year": "1y", "5 Years": "5y"}
         
@@ -242,7 +245,7 @@ with tab_stocks:
         for _, row in stocks_df.iterrows():
             ticker = str(row['Ticker']).strip()
             stock_obj = yf.Ticker(ticker)
-            hist = stock_obj.history(period=period_map[change_period])
+            hist = stock_obj.history(period=period_map[selected_tf])
             
             if len(hist) >= 2:
                 pct_change = ((hist['Close'].iloc[-1] - hist['Close'].iloc[0]) / hist['Close'].iloc[0]) * 100
@@ -251,7 +254,7 @@ with tab_stocks:
             change_values.append(pct_change)
             
         display_stocks_df = stocks_df.copy()
-        col_label = f"Price Change ({change_period})"
+        col_label = f"Change ({selected_tf})"
         display_stocks_df[col_label] = change_values
         
         display_cols = ['Ticker', 'Shares', 'Buy_Price', 'Current_Price', col_label, 'Total_Value', 'P/L (₹)', 'P/L (%)']
@@ -330,6 +333,7 @@ with tab_bonds:
         )
         st.plotly_chart(fig_bonds, use_container_width=True)
         
+        # DISTINCT COLOR STYLING FOR FDs & BONDS TABLE
         st.dataframe(
             bonds_df.style.format({
                 'Invested_Amount': '₹{:.2f}',
@@ -337,7 +341,13 @@ with tab_bonds:
                 'Est. Monthly Payout (₹)': '₹{:.2f}',
                 'Total Interest Earned (₹)': '₹{:.2f}',
                 'Current Value (₹)': '₹{:.2f}'
-            }), 
+            }).map(
+                lambda _: 'color: #00B0FF; font-weight: bold;', subset=['Est. Monthly Payout (₹)']
+            ).map(
+                lambda _: 'color: #00E676; font-weight: bold;', subset=['Total Interest Earned (₹)']
+            ).map(
+                lambda _: 'color: #FFD700; font-weight: bold;', subset=['Current Value (₹)']
+            ), 
             use_container_width=True
         )
     else:
