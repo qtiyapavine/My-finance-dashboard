@@ -11,6 +11,9 @@ STOCKS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNu
 BONDS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=784070610&single=true&output=csv"
 INCOME_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=877997891&single=true&output=csv"
 
+# Baseline start date configuration: August 1, 2026
+BASELINE_DATE_STR = "2026-08-01"
+
 # ----------------------------------------------------
 # 2. STREAMLIT PAGE CONFIGURATION
 # ----------------------------------------------------
@@ -48,7 +51,7 @@ total_bonds_earned_interest = 0.0
 total_monthly_payout = 0.0
 total_monthly_income = 0.0
 
-# Initialize Session State for Daily Wealth Tracking
+# Initialize Session State for Daily Wealth Tracking starting Aug 1, 2026
 if 'wealth_history' not in st.session_state:
     st.session_state.wealth_history = pd.DataFrame(columns=['Date', 'Total Wealth'])
 
@@ -69,7 +72,13 @@ if STOCKS_CSV:
             # Fetch live price
             stock_obj = yf.Ticker(ticker)
             live_data = stock_obj.history(period="1d")
-            price = live_data['Close'].iloc[-1] if not live_data.empty else float(row['Buy_Price'])
+            
+            # Fallback to Aug 1 baseline price if current price is unavailable
+            if not live_data.empty:
+                price = live_data['Close'].iloc[-1]
+            else:
+                aug_data = stock_obj.history(start="2026-08-01", end="2026-08-05")
+                price = aug_data['Close'].iloc[0] if not aug_data.empty else float(row['Buy_Price'])
             
             live_prices.append(price)
             current_vals.append(price * shares)
@@ -153,15 +162,20 @@ if INCOME_CSV:
 net_worth = total_stock_val + total_bonds_val
 stock_gain = total_stock_val - total_stock_invested
 
-# Log wealth history
+# Log wealth history filtered from Aug 1, 2026
 today_str = datetime.today().strftime('%Y-%m-%d')
 history_df = st.session_state.wealth_history
 
-if today_str not in history_df['Date'].values:
+# Filter out pre-Aug 1 baseline entries if present
+history_df = history_df[history_df['Date'] >= BASELINE_DATE_STR]
+
+if today_str not in history_df['Date'].values and today_str >= BASELINE_DATE_STR:
     new_entry = pd.DataFrame([{'Date': today_str, 'Total Wealth': net_worth}])
-    st.session_state.wealth_history = pd.concat([history_df, new_entry], ignore_index=True)
-else:
-    st.session_state.wealth_history.loc[st.session_state.wealth_history['Date'] == today_str, 'Total Wealth'] = net_worth
+    history_df = pd.concat([history_df, new_entry], ignore_index=True)
+elif today_str in history_df['Date'].values:
+    history_df.loc[history_df['Date'] == today_str, 'Total Wealth'] = net_worth
+
+st.session_state.wealth_history = history_df
 
 # ----------------------------------------------------
 # 6. TOP METRICS
@@ -183,7 +197,7 @@ tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs([
 
 # TAB 1: OVERALL SUMMARY
 with tab_overview:
-    st.subheader("📈 Overall Family Wealth Growth")
+    st.subheader("📈 Overall Family Wealth Growth (Starting Aug 1, 2026)")
     
     wealth_data = st.session_state.wealth_history
     if not wealth_data.empty:
@@ -194,6 +208,8 @@ with tab_overview:
         )
         fig_wealth.update_traces(line_color='#00D4B1', line_width=3)
         st.plotly_chart(fig_wealth, use_container_width=True)
+    else:
+        st.info("Tracking active from August 1, 2026.")
     
     st.markdown("---")
     
@@ -342,6 +358,8 @@ with tab_bonds:
                 'Total Interest Earned (₹)': '₹{:.2f}',
                 'Current Value (₹)': '₹{:.2f}'
             }).map(
+                lambda _: 'color: #FF9100; font-weight: bold;', subset=['Interest_Rate_Pct'] # Highlights Interest Rate
+            ).map(
                 lambda _: 'color: #00B0FF; font-weight: bold;', subset=['Est. Monthly Payout (₹)']
             ).map(
                 lambda _: 'color: #00E676; font-weight: bold;', subset=['Total Interest Earned (₹)']
