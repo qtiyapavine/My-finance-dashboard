@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 import yfinance as yf
 import plotly.express as px
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # ----------------------------------------------------
 # 1. HARDCODED GOOGLE SHEET CSV LINKS
@@ -124,7 +124,6 @@ if STOCKS_CSV:
             # Fetch daily historical closing prices from Aug 3, 2026 to today
             hist_data = stock_obj.history(start=START_HIST_DATE)
             if not hist_data.empty:
-                # Calculate daily value for this specific stock
                 daily_stock_val = hist_data['Close'] * shares
                 daily_stock_val.index = daily_stock_val.index.strftime('%Y-%m-%d')
                 daily_closing_wealth_df[ticker] = daily_stock_val
@@ -138,7 +137,6 @@ if STOCKS_CSV:
         total_stock_invested = stocks_df['Invested_Val'].sum()
         total_stock_val = stocks_df['Total_Value'].sum()
         
-        # Sum all stocks daily closing value + bonds value to get total wealth per day
         if not daily_closing_wealth_df.empty:
             daily_wealth_series = daily_closing_wealth_df.sum(axis=1) + total_bonds_val
             
@@ -171,7 +169,6 @@ if INCOME_CSV:
 net_worth = total_stock_val + total_bonds_val
 stock_gain = total_stock_val - total_stock_invested
 
-# Aug 3 baseline comparison for metric delta
 aug3_val = daily_wealth_series.iloc[0] if not daily_wealth_series.empty else net_worth
 wealth_change_since_aug3 = net_worth - aug3_val
 
@@ -198,7 +195,6 @@ with tab_overview:
     st.subheader("📈 Day-by-Day Family Wealth Growth (Daily Closing Prices from Aug 3, 2026)")
     
     if not daily_wealth_series.empty:
-        # Convert daily wealth series to DataFrame for Plotly
         daily_wealth_df = daily_wealth_series.reset_index()
         daily_wealth_df.columns = ['Date', 'Total Wealth (₹)']
         
@@ -211,7 +207,6 @@ with tab_overview:
         fig_wealth.update_layout(hovermode="x unified")
         st.plotly_chart(fig_wealth, use_container_width=True)
         
-        # Display summary table of daily values
         with st.expander("📄 View Day-by-Day Wealth Numbers"):
             st.dataframe(
                 daily_wealth_df.style.format({'Total Wealth (₹)': '₹{:,.2f}'}),
@@ -301,46 +296,109 @@ with tab_stocks:
         )
         
         st.markdown("---")
-        st.subheader("🔍 Individual Stock Deep-Dive & News")
         
-        selected_stock = st.selectbox("Select a stock to view its graph & corporate actions/news:", stocks_df['Ticker'].tolist())
+        # ----------------------------------------------------
+        # AGGREGATED PORTFOLIO NEWS & CORPORATE ACTIONS (±1 Month Filter)
+        # ----------------------------------------------------
+        st.subheader("📰 Whole Portfolio News & Corporate Actions (±1 Month)")
+        
+        today_dt = datetime.today()
+        one_month_ago = today_dt - timedelta(days=30)
+        one_month_ahead = today_dt + timedelta(days=30)
+        
+        col_all_actions, col_all_news = st.columns([1, 1])
+        
+        all_actions = []
+        all_news = []
+        
+        # Loop through all portfolio tickers to aggregate events
+        for t in stocks_df['Ticker'].unique():
+            stk = yf.Ticker(t)
+            
+            # Dividends within ±1 month
+            try:
+                divs = stk.dividends
+                if not divs.empty:
+                    for date_idx, val in divs.items():
+                        event_dt = pd.to_datetime(date_idx).tz_localize(None) if pd.to_datetime(date_idx).tzinfo else pd.to_datetime(date_idx)
+                        if one_month_ago <= event_dt <= one_month_ahead:
+                            all_actions.append({
+                                'Ticker': t, 'Type': 'Dividend', 
+                                'Detail': f"₹{val:.2f}", 'Date': event_dt.strftime('%Y-%m-%d')
+                            })
+            except Exception:
+                pass
+                
+            # Stock Splits within ±1 month
+            try:
+                splits = stk.splits
+                if not splits.empty:
+                    for date_idx, val in splits.items():
+                        event_dt = pd.to_datetime(date_idx).tz_localize(None) if pd.to_datetime(date_idx).tzinfo else pd.to_datetime(date_idx)
+                        if one_month_ago <= event_dt <= one_month_ahead:
+                            all_actions.append({
+                                'Ticker': t, 'Type': 'Split', 
+                                'Detail': f"{val}", 'Date': event_dt.strftime('%Y-%m-%d')
+                            })
+            except Exception:
+                pass
+
+            # News articles within ±1 month
+            try:
+                news_items = stk.news
+                if news_items:
+                    for item in news_items:
+                        pub_time = item.get('providerPublishTime', None)
+                        if pub_time:
+                            pub_dt = datetime.fromtimestamp(pub_time)
+                            if one_month_ago <= pub_dt <= one_month_ahead:
+                                all_news.append({
+                                    'Ticker': t,
+                                    'Title': item.get('title', 'News Item'),
+                                    'Link': item.get('link', '#'),
+                                    'Publisher': item.get('publisher', 'Financial News'),
+                                    'Date': pub_dt.strftime('%Y-%m-%d')
+                                })
+            except Exception:
+                pass
+
+        with col_all_actions:
+            st.markdown("#### 🎁 Corporate Actions (Past & Upcoming 30 Days)")
+            with st.container(height=350):
+                if all_actions:
+                    actions_df = pd.DataFrame(all_actions).sort_values(by='Date', ascending=False)
+                    for _, act in actions_df.iterrows():
+                        st.markdown(f"• **[{act['Ticker']}]** {act['Type']}: `{act['Detail']}` on **{act['Date']}**")
+                else:
+                    st.write("No corporate actions found within the last or upcoming 30 days.")
+
+        with col_all_news:
+            st.markdown("#### 🗞️ Portfolio News Headlines (Past 30 Days)")
+            with st.container(height=350):
+                if all_news:
+                    news_df = pd.DataFrame(all_news).sort_values(by='Date', ascending=False)
+                    for _, n in news_df.iterrows():
+                        st.markdown(f"• **[{n['Ticker']}]** [{n['Title']}]({n['Link']})")
+                        st.caption(f"Source: {n['Publisher']} | Date: {n['Date']}")
+                else:
+                    st.write("No news items found within the last 30 days.")
+
+        st.markdown("---")
+        
+        # ----------------------------------------------------
+        # SINGLE STOCK DEEP DIVE CHART
+        # ----------------------------------------------------
+        st.subheader("🔍 Single Stock Chart Deep-Dive")
+        selected_stock = st.selectbox("Select a stock to view its price chart:", stocks_df['Ticker'].tolist())
         
         if selected_stock:
-            col_graph, col_news = st.columns([3, 2])
             stock_obj = yf.Ticker(selected_stock)
-            
-            with col_graph:
-                time_frame = st.radio("Select Chart Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=0, horizontal=True)
-                stock_data = stock_obj.history(period=time_frame)
-                if not stock_data.empty:
-                    fig_stock_line = px.line(stock_data, y='Close', title=f"Price Chart for {selected_stock}")
-                    fig_stock_line.update_traces(line_color='#3B82F6', line_width=2)
-                    st.plotly_chart(fig_stock_line, use_container_width=True)
-            
-            with col_news:
-                st.write(f"📰 **Latest News & Events for {selected_stock}**")
-                with st.container(height=350):
-                    st.markdown("#### 🎁 Corporate Actions")
-                    dividends = stock_obj.dividends
-                    splits = stock_obj.splits
-                    if not dividends.empty:
-                        st.write(f"• **Latest Dividend:** ₹{dividends.iloc[-1]} ({dividends.index[-1].strftime('%Y-%m-%d')})")
-                    else:
-                        st.write("• **Latest Dividend:** None recorded.")
-                    if not splits.empty:
-                        st.write(f"• **Latest Split:** {splits.iloc[-1]} ({splits.index[-1].strftime('%Y-%m-%d')})")
-                    else:
-                        st.write("• **Latest Split:** None recorded.")
-                        
-                    st.markdown("---")
-                    st.markdown("#### 🗞️ Recent News")
-                    news_list = stock_obj.news
-                    if news_list:
-                        for item in news_list[:5]:
-                            st.markdown(f"• **[{item.get('title', 'Link')}]({item.get('link', '#')})**")
-                            st.caption(f"Source: {item.get('publisher', 'News')}")
-                    else:
-                        st.write("No headlines found.")
+            time_frame = st.radio("Select Chart Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=0, horizontal=True)
+            stock_data = stock_obj.history(period=time_frame)
+            if not stock_data.empty:
+                fig_stock_line = px.line(stock_data, y='Close', title=f"Price Chart for {selected_stock}")
+                fig_stock_line.update_traces(line_color='#3B82F6', line_width=2)
+                st.plotly_chart(fig_stock_line, use_container_width=True)
 
 # TAB 3: FDS & BONDS
 with tab_bonds:
