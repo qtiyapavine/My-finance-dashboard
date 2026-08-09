@@ -200,7 +200,7 @@ with tab_overview:
         
         fig_wealth = px.line(
             daily_wealth_df, x='Date', y='Total Wealth (₹)', 
-            title="Daily Total Wealth Progression (Aug 3, Aug 4, Aug 5, Aug 6, Aug 7...)",
+            title="Daily Total Wealth Progression",
             markers=True
         )
         fig_wealth.update_traces(line_color='#00D4B1', line_width=3, marker_size=8)
