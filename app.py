@@ -177,7 +177,7 @@ with tab_overview:
 # TAB 2: STOCKS PORTFOLIO
 with tab_stocks:
     if not stocks_df.empty:
-        # Overview Charts First
+        # Overview Charts
         col_s1, col_s2 = st.columns(2)
         with col_s1:
             fig_stock_pie = px.pie(
@@ -192,12 +192,68 @@ with tab_stocks:
             )
             st.plotly_chart(fig_stock_bar, use_container_width=True)
             
+        st.markdown("---")
         st.subheader("📋 Detailed Stock Holdings Table")
-        st.dataframe(stocks_df, use_container_width=True)
+        
+        # TIMEFRAME SELECTOR FOR TABLE CHANGE COLUMN
+        change_period = st.radio(
+            "Select Timeframe for Price Change Column:",
+            ["1 Day", "1 Week", "1 Month", "1 Year", "5 Years"],
+            index=0,
+            horizontal=True
+        )
+        
+        # Map selector option to Yahoo Finance period codes
+        period_map = {
+            "1 Day": "2d",     # Need 2 days to compute 1-day change
+            "1 Week": "5d",
+            "1 Month": "1mo",
+            "1 Year": "1y",
+            "5 Years": "5y"
+        }
+        
+        # Calculate % Change dynamically for each stock
+        change_values = []
+        for _, row in stocks_df.iterrows():
+            ticker = str(row['Ticker']).strip()
+            stock_obj = yf.Ticker(ticker)
+            hist = stock_obj.history(period=period_map[change_period])
+            
+            if len(hist) >= 2:
+                start_price = hist['Close'].iloc[0]
+                end_price = hist['Close'].iloc[-1]
+                pct_change = ((end_price - start_price) / start_price) * 100
+            else:
+                pct_change = 0.0
+            change_values.append(pct_change)
+            
+        # Copy DataFrame and insert Change column
+        display_stocks_df = stocks_df.copy()
+        col_label = f"Change ({change_period})"
+        display_stocks_df[col_label] = change_values
+        
+        # Reorder columns cleanly
+        display_cols = ['Ticker', 'Shares', 'Buy_Price', 'Current_Price', col_label, 'Total_Value', 'P/L']
+        display_stocks_df = display_stocks_df[display_cols]
+        
+        # Display Styled Table with Green/Red Color Formatting
+        st.dataframe(
+            display_stocks_df.style.format({
+                'Buy_Price': '₹{:.2f}',
+                'Current_Price': '₹{:.2f}',
+                col_label: '{:+.2f}%',
+                'Total_Value': '₹{:.2f}',
+                'P/L': '₹{:.2f}'
+            }).map(
+                lambda v: 'color: #00E676; font-weight: bold;' if v > 0 else ('color: #FF5252; font-weight: bold;' if v < 0 else ''),
+                subset=[col_label, 'P/L']
+            ),
+            use_container_width=True
+        )
         
         st.markdown("---")
         
-        # 🔍 INDIVIDUAL STOCK ANALYSIS SECTION (Below Table)
+        # 🔍 INDIVIDUAL STOCK ANALYSIS SECTION
         st.subheader("🔍 Individual Stock Deep-Dive & News")
         
         selected_stock = st.selectbox(
@@ -211,7 +267,7 @@ with tab_stocks:
             
             # Left Side: Individual Stock Chart
             with col_graph:
-                time_frame = st.radio("Select Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=3, horizontal=True)
+                time_frame = st.radio("Select Chart Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=3, horizontal=True)
                 stock_data = stock_obj.history(period=time_frame)
                 
                 if not stock_data.empty:
@@ -227,9 +283,7 @@ with tab_stocks:
             with col_news:
                 st.write(f"📰 **Latest News & Events for {selected_stock}**")
                 
-                # Scrollable box container for corporate info & news
                 with st.container(height=350):
-                    # Corporate Actions (Dividends / Splits)
                     st.markdown("#### 🎁 Corporate Actions")
                     dividends = stock_obj.dividends
                     splits = stock_obj.splits
@@ -249,10 +303,9 @@ with tab_stocks:
                     st.markdown("---")
                     st.markdown("#### 🗞️ Recent Market News")
                     
-                    # Fetch Yahoo Finance News
                     news_list = stock_obj.news
                     if news_list:
-                        for item in news_list[:5]: # Top 5 headlines
+                        for item in news_list[:5]:
                             title = item.get('title', 'No Title')
                             publisher = item.get('publisher', 'Market News')
                             link = item.get('link', '#')
@@ -286,4 +339,3 @@ with tab_income:
         st.dataframe(income_df, use_container_width=True)
     else:
         st.info("No Income data loaded.")
-        
