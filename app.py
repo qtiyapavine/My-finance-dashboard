@@ -296,9 +296,26 @@ with tab_stocks:
         )
         
         st.markdown("---")
-        
+
         # ----------------------------------------------------
-        # AGGREGATED PORTFOLIO NEWS & CORPORATE ACTIONS (±1 Month Filter)
+        # SINGLE STOCK DEEP DIVE CHART
+        # ----------------------------------------------------
+        st.subheader("🔍 Single Stock Chart Deep-Dive")
+        selected_stock = st.selectbox("Select a stock to view its price chart:", stocks_df['Ticker'].tolist())
+        
+        if selected_stock:
+            stock_obj = yf.Ticker(selected_stock)
+            time_frame = st.radio("Select Chart Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=0, horizontal=True)
+            stock_data = stock_obj.history(period=time_frame)
+            if not stock_data.empty:
+                fig_stock_line = px.line(stock_data, y='Close', title=f"Price Chart for {selected_stock}")
+                fig_stock_line.update_traces(line_color='#3B82F6', line_width=2)
+                st.plotly_chart(fig_stock_line, use_container_width=True)
+
+        st.markdown("---")
+
+        # ----------------------------------------------------
+        # AGGREGATED PORTFOLIO NEWS & CORPORATE ACTIONS (±1 Month Filter) - BELOW CHART
         # ----------------------------------------------------
         st.subheader("📰 Whole Portfolio News & Corporate Actions (±1 Month)")
         
@@ -382,23 +399,6 @@ with tab_stocks:
                         st.caption(f"Source: {n['Publisher']} | Date: {n['Date']}")
                 else:
                     st.write("No news items found within the last 30 days.")
-
-        st.markdown("---")
-        
-        # ----------------------------------------------------
-        # SINGLE STOCK DEEP DIVE CHART
-        # ----------------------------------------------------
-        st.subheader("🔍 Single Stock Chart Deep-Dive")
-        selected_stock = st.selectbox("Select a stock to view its price chart:", stocks_df['Ticker'].tolist())
-        
-        if selected_stock:
-            stock_obj = yf.Ticker(selected_stock)
-            time_frame = st.radio("Select Chart Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=0, horizontal=True)
-            stock_data = stock_obj.history(period=time_frame)
-            if not stock_data.empty:
-                fig_stock_line = px.line(stock_data, y='Close', title=f"Price Chart for {selected_stock}")
-                fig_stock_line.update_traces(line_color='#3B82F6', line_width=2)
-                st.plotly_chart(fig_stock_line, use_container_width=True)
 
 # TAB 3: FDS & BONDS
 with tab_bonds:
