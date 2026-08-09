@@ -45,6 +45,7 @@ with st.sidebar:
 
 # Global Variables
 total_stock_val = 0.0
+aug1_stock_val = 0.0
 total_stock_invested = 0.0
 total_bonds_val = 0.0
 total_bonds_earned_interest = 0.0
@@ -56,34 +57,40 @@ if 'wealth_history' not in st.session_state:
     st.session_state.wealth_history = pd.DataFrame(columns=['Date', 'Total Wealth'])
 
 # ----------------------------------------------------
-# 3. DATA PROCESSING: STOCKS
+# 3. DATA PROCESSING: STOCKS (Live + Aug 1 Baseline)
 # ----------------------------------------------------
 stocks_df = pd.DataFrame()
 if STOCKS_CSV:
     try:
         stocks_df = pd.read_csv(STOCKS_CSV)
         live_prices = []
+        aug1_prices = []
         current_vals = []
         
         for _, row in stocks_df.iterrows():
             ticker = str(row['Ticker']).strip()
             shares = float(row['Shares'])
             
-            # Fetch live price
             stock_obj = yf.Ticker(ticker)
+            
+            # Fetch Current Live Price
             live_data = stock_obj.history(period="1d")
+            price_live = live_data['Close'].iloc[-1] if not live_data.empty else float(row['Buy_Price'])
             
-            # Fallback to Aug 1 baseline price if current price is unavailable
-            if not live_data.empty:
-                price = live_data['Close'].iloc[-1]
+            # Fetch Price specifically around August 1, 2026
+            aug_data = stock_obj.history(start="2026-08-01", end="2026-08-05")
+            if not aug_data.empty:
+                price_aug1 = aug_data['Close'].iloc[0]
             else:
-                aug_data = stock_obj.history(start="2026-08-01", end="2026-08-05")
-                price = aug_data['Close'].iloc[0] if not aug_data.empty else float(row['Buy_Price'])
-            
-            live_prices.append(price)
-            current_vals.append(price * shares)
+                price_aug1 = price_live
+                
+            live_prices.append(price_live)
+            aug1_prices.append(price_aug1)
+            current_vals.append(price_live * shares)
+            aug1_stock_val += (price_aug1 * shares)
             
         stocks_df['Current_Price'] = live_prices
+        stocks_df['Aug1_Price'] = aug1_prices
         stocks_df['Total_Value'] = current_vals
         stocks_df['Invested_Val'] = stocks_df['Shares'] * stocks_df['Buy_Price']
         stocks_df['P/L (₹)'] = stocks_df['Total_Value'] - stocks_df['Invested_Val']
@@ -158,30 +165,31 @@ if INCOME_CSV:
     except Exception as e:
         st.sidebar.error(f"Error loading Income: {e}")
 
-# Net Worth
+# Net Worth Calculations
 net_worth = total_stock_val + total_bonds_val
+aug1_net_worth = aug1_stock_val + total_bonds_val
 stock_gain = total_stock_val - total_stock_invested
 
-# Log wealth history filtered from Aug 1, 2026
+# ----------------------------------------------------
+# WEALTH HISTORY TRAJECTORY (Aug 1, 2026 -> Today)
+# ----------------------------------------------------
 today_str = datetime.today().strftime('%Y-%m-%d')
-history_df = st.session_state.wealth_history
 
-# Filter out pre-Aug 1 baseline entries if present
-history_df = history_df[history_df['Date'] >= BASELINE_DATE_STR]
+# Construct baseline DataFrame starting with August 1, 2026
+history_records = [
+    {'Date': BASELINE_DATE_STR, 'Total Wealth': aug1_net_worth}
+]
 
-if today_str not in history_df['Date'].values and today_str >= BASELINE_DATE_STR:
-    new_entry = pd.DataFrame([{'Date': today_str, 'Total Wealth': net_worth}])
-    history_df = pd.concat([history_df, new_entry], ignore_index=True)
-elif today_str in history_df['Date'].values:
-    history_df.loc[history_df['Date'] == today_str, 'Total Wealth'] = net_worth
+if today_str != BASELINE_DATE_STR:
+    history_records.append({'Date': today_str, 'Total Wealth': net_worth})
 
-st.session_state.wealth_history = history_df
+st.session_state.wealth_history = pd.DataFrame(history_records)
 
 # ----------------------------------------------------
 # 6. TOP METRICS
 # ----------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("💰 Total Family Net Worth", f"₹{net_worth:,.2f}")
+m1.metric("💰 Total Family Net Worth", f"₹{net_worth:,.2f}", delta=f"₹{(net_worth - aug1_net_worth):,.2f} since Aug 1")
 m2.metric("📈 Stocks Current Value", f"₹{total_stock_val:,.2f}", delta=f"₹{stock_gain:,.2f}")
 m3.metric("🏦 FDs & Bonds (Total Value)", f"₹{total_bonds_val:,.2f}", delta=f"₹{total_bonds_earned_interest:,.2f} Earned")
 m4.metric("💵 Total Monthly Cashflow", f"₹{total_monthly_income:,.2f}", delta=f"₹{total_monthly_payout:,.2f} from FDs")
@@ -197,19 +205,17 @@ tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs([
 
 # TAB 1: OVERALL SUMMARY
 with tab_overview:
-    st.subheader("📈 Overall Family Wealth Growth (Starting Aug 1, 2026)")
+    st.subheader("📈 Overall Family Wealth Growth (Calculated from Aug 1, 2026)")
     
     wealth_data = st.session_state.wealth_history
     if not wealth_data.empty:
         fig_wealth = px.line(
             wealth_data, x='Date', y='Total Wealth', 
-            title="Total Wealth Trend Over Time",
+            title="Total Wealth Growth: Aug 1, 2026 Baseline vs Current",
             markers=True
         )
-        fig_wealth.update_traces(line_color='#00D4B1', line_width=3)
+        fig_wealth.update_traces(line_color='#00D4B1', line_width=3, marker_size=10)
         st.plotly_chart(fig_wealth, use_container_width=True)
-    else:
-        st.info("Tracking active from August 1, 2026.")
     
     st.markdown("---")
     
@@ -349,7 +355,6 @@ with tab_bonds:
         )
         st.plotly_chart(fig_bonds, use_container_width=True)
         
-        # DISTINCT COLOR STYLING FOR FDs & BONDS TABLE
         st.dataframe(
             bonds_df.style.format({
                 'Invested_Amount': '₹{:.2f}',
@@ -358,7 +363,7 @@ with tab_bonds:
                 'Total Interest Earned (₹)': '₹{:.2f}',
                 'Current Value (₹)': '₹{:.2f}'
             }).map(
-                lambda _: 'color: #FF9100; font-weight: bold;', subset=['Interest_Rate_Pct'] # Highlights Interest Rate
+                lambda _: 'color: #FF9100; font-weight: bold;', subset=['Interest_Rate_Pct']
             ).map(
                 lambda _: 'color: #00B0FF; font-weight: bold;', subset=['Est. Monthly Payout (₹)']
             ).map(
