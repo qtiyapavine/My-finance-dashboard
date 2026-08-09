@@ -5,7 +5,7 @@ import plotly.express as px
 
 # ----------------------------------------------------
 # 1. HARDCODED GOOGLE SHEET CSV LINKS
-# Replace the URLs inside the quotes with your actual published CSV links
+# Replace these strings with your actual published CSV links
 # ----------------------------------------------------
 STOCKS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=0&single=true&output=csv"
 BONDS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=784070610&single=true&output=csv"
@@ -38,6 +38,13 @@ with st.sidebar:
     st.header("⚙️ Controls")
     if st.button("🔄 Refresh Data"):
         st.rerun()
+    
+    timeframe = st.selectbox(
+        "📅 Historical Chart Timeframe:",
+        ["1mo", "3mo", "6mo", "1y", "2y", "5y"],
+        index=3,
+        help="Select period for the daily wealth growth chart"
+    )
     st.caption("Editing your Google Sheet will auto-reflect here on refresh.")
 
 # Global Variables
@@ -45,9 +52,10 @@ total_stock_val = 0.0
 total_stock_invested = 0.0
 total_bonds_val = 0.0
 total_monthly_income = 0.0
+portfolio_history_df = pd.DataFrame()
 
 # ----------------------------------------------------
-# 3. DATA PROCESSING: STOCKS
+# 3. DATA PROCESSING: STOCKS & HISTORICAL GROWTH
 # ----------------------------------------------------
 stocks_df = pd.DataFrame()
 if STOCKS_CSV and "http" in STOCKS_CSV:
@@ -56,16 +64,26 @@ if STOCKS_CSV and "http" in STOCKS_CSV:
         live_prices = []
         current_vals = []
         
+        # Historical stock data tracking container
+        history_series_list = []
+        
         for _, row in stocks_df.iterrows():
             ticker = row['Ticker']
             shares = float(row['Shares'])
             
-            # Fetch live price via Yahoo Finance
-            data = yf.Ticker(ticker).history(period="1d")
-            price = data['Close'].iloc[-1] if not data.empty else float(row['Buy_Price'])
+            # Fetch live & historical price via Yahoo Finance
+            stock_obj = yf.Ticker(ticker)
             
+            # Current price
+            live_data = stock_obj.history(period="1d")
+            price = live_data['Close'].iloc[-1] if not live_data.empty else float(row['Buy_Price'])
             live_prices.append(price)
             current_vals.append(price * shares)
+            
+            # Daily Historical Prices for Growth Chart
+            hist = stock_obj.history(period=timeframe)['Close'] * shares
+            hist.name = ticker
+            history_series_list.append(hist)
             
         stocks_df['Current_Price'] = live_prices
         stocks_df['Total_Value'] = current_vals
@@ -73,6 +91,12 @@ if STOCKS_CSV and "http" in STOCKS_CSV:
         
         total_stock_invested = (stocks_df['Shares'] * stocks_df['Buy_Price']).sum()
         total_stock_val = stocks_df['Total_Value'].sum()
+        
+        # Combine all daily stock values into a single timeline
+        if history_series_list:
+            portfolio_history_df = pd.concat(history_series_list, axis=1).ffill().dropna()
+            portfolio_history_df['Total Stocks Value'] = portfolio_history_df.sum(axis=1)
+
     except Exception as e:
         st.sidebar.error(f"Error loading Stocks tab: {e}")
 
@@ -86,6 +110,10 @@ if BONDS_CSV and "http" in BONDS_CSV:
         total_bonds_val = bonds_df['Invested_Amount'].sum()
     except Exception as e:
         st.sidebar.error(f"Error loading FDs & Bonds tab: {e}")
+
+# Add FDs/Bonds value to the daily historical sum
+if not portfolio_history_df.empty:
+    portfolio_history_df['Total Wealth'] = portfolio_history_df['Total Stocks Value'] + total_bonds_val
 
 # ----------------------------------------------------
 # 5. DATA PROCESSING: INCOME
@@ -130,8 +158,25 @@ tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs([
     "📊 Overall Summary", "📈 Stocks Portfolio", "📜 FDs & Bonds", "💵 Income Tracker"
 ])
 
-# TAB 1: OVERALL SUMMARY
+# TAB 1: OVERALL SUMMARY & DAILY WEALTH CHART
 with tab_overview:
+    # 📈 DAILY WEALTH GROWTH CHART
+    st.subheader("📈 Overall Daily Wealth Growth")
+    if not portfolio_history_df.empty:
+        fig_wealth = px.line(
+            portfolio_history_df, 
+            y='Total Wealth', 
+            title="Daily Total Wealth Trend (Stocks + Fixed Income)",
+            labels={'Date': 'Date', 'Total Wealth': 'Value (₹)'}
+        )
+        fig_wealth.update_traces(line_color='#00D4B1', line_width=2.5)
+        fig_wealth.update_layout(hovermode="x unified")
+        st.plotly_chart(fig_wealth, use_container_width=True)
+    else:
+        st.info("Daily growth chart will render here once stock CSV link is verified.")
+
+    st.markdown("---")
+    
     st.subheader("Asset Allocation Breakdown")
     if net_worth > 0:
         alloc_data = {
@@ -143,8 +188,6 @@ with tab_overview:
             hole=0.4, color_discrete_sequence=["#00D4B1", "#3B82F6"]
         )
         st.plotly_chart(fig_donut, use_container_width=True)
-    else:
-        st.info("Please update your CSV URLs in app.py to view your asset allocation charts!")
 
 # TAB 2: STOCKS DETAIL
 with tab_stocks:
@@ -164,7 +207,7 @@ with tab_stocks:
             st.plotly_chart(fig_stock_bar, use_container_width=True)
             
         st.subheader("Detailed Stock Holdings")
-        st.dataframe(stocks_df.style.highlight_max(axis=0), use_container_width=True)
+        st.dataframe(stocks_df, use_container_width=True)
     else:
         st.info("No Stocks data loaded.")
 
