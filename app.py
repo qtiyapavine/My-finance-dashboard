@@ -11,8 +11,8 @@ STOCKS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNu
 BONDS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=784070610&single=true&output=csv"
 INCOME_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=877997891&single=true&output=csv"
 
-# Baseline start date configuration: August 1, 2026
-BASELINE_DATE_STR = "2026-08-01"
+# Start date for daily line chart (Aug 1 & 2 were weekend holidays)
+START_HIST_DATE = "2026-08-03"
 
 # ----------------------------------------------------
 # 2. STREAMLIT PAGE CONFIGURATION
@@ -24,7 +24,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom Dashboard Styling
+# Custom Styling
 st.markdown("""
     <style>
     .main { padding: 1rem 2rem; }
@@ -45,64 +45,14 @@ with st.sidebar:
 
 # Global Variables
 total_stock_val = 0.0
-aug1_stock_val = 0.0
 total_stock_invested = 0.0
 total_bonds_val = 0.0
 total_bonds_earned_interest = 0.0
 total_monthly_payout = 0.0
 total_monthly_income = 0.0
 
-# Initialize Session State for Daily Wealth Tracking starting Aug 1, 2026
-if 'wealth_history' not in st.session_state:
-    st.session_state.wealth_history = pd.DataFrame(columns=['Date', 'Total Wealth'])
-
 # ----------------------------------------------------
-# 3. DATA PROCESSING: STOCKS (Live + Aug 1 Baseline)
-# ----------------------------------------------------
-stocks_df = pd.DataFrame()
-if STOCKS_CSV:
-    try:
-        stocks_df = pd.read_csv(STOCKS_CSV)
-        live_prices = []
-        aug1_prices = []
-        current_vals = []
-        
-        for _, row in stocks_df.iterrows():
-            ticker = str(row['Ticker']).strip()
-            shares = float(row['Shares'])
-            
-            stock_obj = yf.Ticker(ticker)
-            
-            # Fetch Current Live Price
-            live_data = stock_obj.history(period="1d")
-            price_live = live_data['Close'].iloc[-1] if not live_data.empty else float(row['Buy_Price'])
-            
-            # Fetch Price specifically around August 1, 2026
-            aug_data = stock_obj.history(start="2026-08-01", end="2026-08-05")
-            if not aug_data.empty:
-                price_aug1 = aug_data['Close'].iloc[0]
-            else:
-                price_aug1 = price_live
-                
-            live_prices.append(price_live)
-            aug1_prices.append(price_aug1)
-            current_vals.append(price_live * shares)
-            aug1_stock_val += (price_aug1 * shares)
-            
-        stocks_df['Current_Price'] = live_prices
-        stocks_df['Aug1_Price'] = aug1_prices
-        stocks_df['Total_Value'] = current_vals
-        stocks_df['Invested_Val'] = stocks_df['Shares'] * stocks_df['Buy_Price']
-        stocks_df['P/L (₹)'] = stocks_df['Total_Value'] - stocks_df['Invested_Val']
-        stocks_df['P/L (%)'] = (stocks_df['P/L (₹)'] / stocks_df['Invested_Val']) * 100
-        
-        total_stock_invested = stocks_df['Invested_Val'].sum()
-        total_stock_val = stocks_df['Total_Value'].sum()
-    except Exception as e:
-        st.sidebar.error(f"Error loading Stocks: {e}")
-
-# ----------------------------------------------------
-# 4. DATA PROCESSING: FDs & BONDS
+# 3. DATA PROCESSING: FDs & BONDS
 # ----------------------------------------------------
 bonds_df = pd.DataFrame()
 if BONDS_CSV:
@@ -121,7 +71,7 @@ if BONDS_CSV:
             monthly_income = (principal * rate) / 12.0
             monthly_payout_list.append(monthly_income)
             
-            # Calculate total months active from Purchase_Date
+            # Calculate months active
             if 'Purchase_Date' in row and pd.notnull(row['Purchase_Date']):
                 p_date = pd.to_datetime(row['Purchase_Date'])
                 months_active = (today.year - p_date.year) * 12 + (today.month - p_date.month)
@@ -142,6 +92,58 @@ if BONDS_CSV:
         
     except Exception as e:
         st.sidebar.error(f"Error loading FDs & Bonds: {e}")
+
+# ----------------------------------------------------
+# 4. DATA PROCESSING: STOCKS (Live + Daily History)
+# ----------------------------------------------------
+stocks_df = pd.DataFrame()
+daily_wealth_series = pd.Series(dtype=float)
+
+if STOCKS_CSV:
+    try:
+        stocks_df = pd.read_csv(STOCKS_CSV)
+        live_prices = []
+        current_vals = []
+        
+        # DataFrame to collect daily closing wealth per ticker
+        daily_closing_wealth_df = pd.DataFrame()
+        
+        for _, row in stocks_df.iterrows():
+            ticker = str(row['Ticker']).strip()
+            shares = float(row['Shares'])
+            
+            stock_obj = yf.Ticker(ticker)
+            
+            # Fetch Live Price
+            live_data = stock_obj.history(period="1d")
+            price_live = live_data['Close'].iloc[-1] if not live_data.empty else float(row['Buy_Price'])
+            
+            live_prices.append(price_live)
+            current_vals.append(price_live * shares)
+            
+            # Fetch daily historical closing prices from Aug 3, 2026 to today
+            hist_data = stock_obj.history(start=START_HIST_DATE)
+            if not hist_data.empty:
+                # Calculate daily value for this specific stock
+                daily_stock_val = hist_data['Close'] * shares
+                daily_stock_val.index = daily_stock_val.index.strftime('%Y-%m-%d')
+                daily_closing_wealth_df[ticker] = daily_stock_val
+                
+        stocks_df['Current_Price'] = live_prices
+        stocks_df['Total_Value'] = current_vals
+        stocks_df['Invested_Val'] = stocks_df['Shares'] * stocks_df['Buy_Price']
+        stocks_df['P/L (₹)'] = stocks_df['Total_Value'] - stocks_df['Invested_Val']
+        stocks_df['P/L (%)'] = (stocks_df['P/L (₹)'] / stocks_df['Invested_Val']) * 100
+        
+        total_stock_invested = stocks_df['Invested_Val'].sum()
+        total_stock_val = stocks_df['Total_Value'].sum()
+        
+        # Sum all stocks daily closing value + bonds value to get total wealth per day
+        if not daily_closing_wealth_df.empty:
+            daily_wealth_series = daily_closing_wealth_df.sum(axis=1) + total_bonds_val
+            
+    except Exception as e:
+        st.sidebar.error(f"Error loading Stocks: {e}")
 
 # ----------------------------------------------------
 # 5. DATA PROCESSING: INCOME
@@ -167,29 +169,17 @@ if INCOME_CSV:
 
 # Net Worth Calculations
 net_worth = total_stock_val + total_bonds_val
-aug1_net_worth = aug1_stock_val + total_bonds_val
 stock_gain = total_stock_val - total_stock_invested
 
-# ----------------------------------------------------
-# WEALTH HISTORY TRAJECTORY (Aug 1, 2026 -> Today)
-# ----------------------------------------------------
-today_str = datetime.today().strftime('%Y-%m-%d')
-
-# Construct baseline DataFrame starting with August 1, 2026
-history_records = [
-    {'Date': BASELINE_DATE_STR, 'Total Wealth': aug1_net_worth}
-]
-
-if today_str != BASELINE_DATE_STR:
-    history_records.append({'Date': today_str, 'Total Wealth': net_worth})
-
-st.session_state.wealth_history = pd.DataFrame(history_records)
+# Aug 3 baseline comparison for metric delta
+aug3_val = daily_wealth_series.iloc[0] if not daily_wealth_series.empty else net_worth
+wealth_change_since_aug3 = net_worth - aug3_val
 
 # ----------------------------------------------------
 # 6. TOP METRICS
 # ----------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("💰 Total Family Net Worth", f"₹{net_worth:,.2f}", delta=f"₹{(net_worth - aug1_net_worth):,.2f} since Aug 1")
+m1.metric("💰 Total Family Net Worth", f"₹{net_worth:,.2f}", delta=f"₹{wealth_change_since_aug3:,.2f} since Aug 3")
 m2.metric("📈 Stocks Current Value", f"₹{total_stock_val:,.2f}", delta=f"₹{stock_gain:,.2f}")
 m3.metric("🏦 FDs & Bonds (Total Value)", f"₹{total_bonds_val:,.2f}", delta=f"₹{total_bonds_earned_interest:,.2f} Earned")
 m4.metric("💵 Total Monthly Cashflow", f"₹{total_monthly_income:,.2f}", delta=f"₹{total_monthly_payout:,.2f} from FDs")
@@ -205,17 +195,30 @@ tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs([
 
 # TAB 1: OVERALL SUMMARY
 with tab_overview:
-    st.subheader("📈 Overall Family Wealth Growth (Calculated from Aug 1, 2026)")
+    st.subheader("📈 Day-by-Day Family Wealth Growth (Daily Closing Prices from Aug 3, 2026)")
     
-    wealth_data = st.session_state.wealth_history
-    if not wealth_data.empty:
+    if not daily_wealth_series.empty:
+        # Convert daily wealth series to DataFrame for Plotly
+        daily_wealth_df = daily_wealth_series.reset_index()
+        daily_wealth_df.columns = ['Date', 'Total Wealth (₹)']
+        
         fig_wealth = px.line(
-            wealth_data, x='Date', y='Total Wealth', 
-            title="Total Wealth Growth: Aug 1, 2026 Baseline vs Current",
+            daily_wealth_df, x='Date', y='Total Wealth (₹)', 
+            title="Daily Total Wealth Progression (Aug 3, Aug 4, Aug 5, Aug 6, Aug 7...)",
             markers=True
         )
-        fig_wealth.update_traces(line_color='#00D4B1', line_width=3, marker_size=10)
+        fig_wealth.update_traces(line_color='#00D4B1', line_width=3, marker_size=8)
+        fig_wealth.update_layout(hovermode="x unified")
         st.plotly_chart(fig_wealth, use_container_width=True)
+        
+        # Display summary table of daily values
+        with st.expander("📄 View Day-by-Day Wealth Numbers"):
+            st.dataframe(
+                daily_wealth_df.style.format({'Total Wealth (₹)': '₹{:,.2f}'}),
+                use_container_width=True
+            )
+    else:
+        st.info("Daily market history is loading or unavailable.")
     
     st.markdown("---")
     
@@ -307,7 +310,7 @@ with tab_stocks:
             stock_obj = yf.Ticker(selected_stock)
             
             with col_graph:
-                time_frame = st.radio("Select Chart Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=3, horizontal=True)
+                time_frame = st.radio("Select Chart Period:", ["1mo", "3mo", "6mo", "1y", "5y"], index=0, horizontal=True)
                 stock_data = stock_obj.history(period=time_frame)
                 if not stock_data.empty:
                     fig_stock_line = px.line(stock_data, y='Close', title=f"Price Chart for {selected_stock}")
