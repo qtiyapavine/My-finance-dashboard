@@ -11,7 +11,7 @@ STOCKS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNu
 BONDS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=784070610&single=true&output=csv"
 INCOME_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=877997891&single=true&output=csv"
 
-# Start date for daily line chart (Aug 1 & 2 were weekend holidays)
+# Start date for daily line chart
 START_HIST_DATE = "2026-08-03"
 
 # ----------------------------------------------------
@@ -50,6 +50,7 @@ total_bonds_val = 0.0
 total_bonds_earned_interest = 0.0
 total_monthly_payout = 0.0
 total_monthly_income = 0.0
+total_realized_pnl = 0.0
 
 # ----------------------------------------------------
 # 3. DATA PROCESSING: FDs & BONDS
@@ -94,52 +95,73 @@ if BONDS_CSV:
         st.sidebar.error(f"Error loading FDs & Bonds: {e}")
 
 # ----------------------------------------------------
-# 4. DATA PROCESSING: STOCKS (Live + Daily History)
+# 4. DATA PROCESSING: STOCKS (Active + Closed Trades)
 # ----------------------------------------------------
 stocks_df = pd.DataFrame()
+closed_df = pd.DataFrame()
 daily_wealth_series = pd.Series(dtype=float)
 
 if STOCKS_CSV:
     try:
-        stocks_df = pd.read_csv(STOCKS_CSV)
-        live_prices = []
-        current_vals = []
+        raw_stocks_df = pd.read_csv(STOCKS_CSV)
         
-        # DataFrame to collect daily closing wealth per ticker
-        daily_closing_wealth_df = pd.DataFrame()
-        
-        for _, row in stocks_df.iterrows():
-            ticker = str(row['Ticker']).strip()
-            shares = float(row['Shares'])
+        # Separate Active and Sold/Closed positions if 'Status' or 'Shares' == 0 exists
+        if 'Status' in raw_stocks_df.columns:
+            stocks_df = raw_stocks_df[raw_stocks_df['Status'].astype(str).str.lower() != 'sold'].copy()
+            closed_df = raw_stocks_df[raw_stocks_df['Status'].astype(str).str.lower() == 'sold'].copy()
+        elif 'Shares' in raw_stocks_df.columns:
+            stocks_df = raw_stocks_df[raw_stocks_df['Shares'] > 0].copy()
+            closed_df = raw_stocks_df[raw_stocks_df['Shares'] == 0].copy()
+        else:
+            stocks_df = raw_stocks_df.copy()
+
+        # Process Active Stocks
+        if not stocks_df.empty:
+            live_prices = []
+            current_vals = []
+            daily_closing_wealth_df = pd.DataFrame()
             
-            stock_obj = yf.Ticker(ticker)
-            
-            # Fetch Live Price
-            live_data = stock_obj.history(period="1d")
-            price_live = live_data['Close'].iloc[-1] if not live_data.empty else float(row['Buy_Price'])
-            
-            live_prices.append(price_live)
-            current_vals.append(price_live * shares)
-            
-            # Fetch daily historical closing prices from Aug 3, 2026 to today
-            hist_data = stock_obj.history(start=START_HIST_DATE)
-            if not hist_data.empty:
-                daily_stock_val = hist_data['Close'] * shares
-                daily_stock_val.index = daily_stock_val.index.strftime('%Y-%m-%d')
-                daily_closing_wealth_df[ticker] = daily_stock_val
+            for _, row in stocks_df.iterrows():
+                ticker = str(row['Ticker']).strip()
+                shares = float(row['Shares'])
+                stock_obj = yf.Ticker(ticker)
                 
-        stocks_df['Current_Price'] = live_prices
-        stocks_df['Total_Value'] = current_vals
-        stocks_df['Invested_Val'] = stocks_df['Shares'] * stocks_df['Buy_Price']
-        stocks_df['P/L (₹)'] = stocks_df['Total_Value'] - stocks_df['Invested_Val']
-        stocks_df['P/L (%)'] = (stocks_df['P/L (₹)'] / stocks_df['Invested_Val']) * 100
-        
-        total_stock_invested = stocks_df['Invested_Val'].sum()
-        total_stock_val = stocks_df['Total_Value'].sum()
-        
-        if not daily_closing_wealth_df.empty:
-            daily_wealth_series = daily_closing_wealth_df.sum(axis=1) + total_bonds_val
+                # Fetch Live Price
+                live_data = stock_obj.history(period="1d")
+                price_live = live_data['Close'].iloc[-1] if not live_data.empty else float(row['Buy_Price'])
+                live_prices.append(price_live)
+                current_vals.append(price_live * shares)
+                
+                # Fetch daily historical prices from Aug 3, 2026
+                hist_data = stock_obj.history(start=START_HIST_DATE)
+                if not hist_data.empty:
+                    daily_stock_val = hist_data['Close'] * shares
+                    daily_stock_val.index = daily_stock_val.index.strftime('%Y-%m-%d')
+                    daily_closing_wealth_df[ticker] = daily_stock_val
+                    
+            stocks_df['Current_Price'] = live_prices
+            stocks_df['Total_Value'] = current_vals
+            stocks_df['Invested_Val'] = stocks_df['Shares'] * stocks_df['Buy_Price']
+            stocks_df['P/L (₹)'] = stocks_df['Total_Value'] - stocks_df['Invested_Val']
+            stocks_df['P/L (%)'] = (stocks_df['P/L (₹)'] / stocks_df['Invested_Val']) * 100
             
+            if 'Remarks' not in stocks_df.columns:
+                stocks_df['Remarks'] = "-"
+                
+            total_stock_invested = stocks_df['Invested_Val'].sum()
+            total_stock_val = stocks_df['Total_Value'].sum()
+            
+            if not daily_closing_wealth_df.empty:
+                daily_wealth_series = daily_closing_wealth_df.sum(axis=1) + total_bonds_val
+
+        # Process Closed / Realized Trades
+        if not closed_df.empty:
+            if 'Realized_PnL' in closed_df.columns:
+                total_realized_pnl = pd.to_numeric(closed_df['Realized_PnL'], errors='coerce').sum()
+            elif 'Sell_Price' in closed_df.columns and 'Buy_Price' in closed_df.columns:
+                closed_df['Realized_PnL'] = (closed_df['Sell_Price'] - closed_df['Buy_Price']) * closed_df.get('Shares_Sold', closed_df.get('Shares', 1))
+                total_realized_pnl = closed_df['Realized_PnL'].sum()
+
     except Exception as e:
         st.sidebar.error(f"Error loading Stocks: {e}")
 
@@ -162,13 +184,16 @@ if INCOME_CSV:
             else:
                 monthly_total += amt
         total_monthly_income = monthly_total + total_monthly_payout
+        
+        if 'Notes' not in income_df.columns and 'Remarks' not in income_df.columns:
+            income_df['Notes'] = "-"
+            
     except Exception as e:
         st.sidebar.error(f"Error loading Income: {e}")
 
 # Net Worth Calculations
 net_worth = total_stock_val + total_bonds_val
 stock_gain = total_stock_val - total_stock_invested
-
 aug3_val = daily_wealth_series.iloc[0] if not daily_wealth_series.empty else net_worth
 wealth_change_since_aug3 = net_worth - aug3_val
 
@@ -177,9 +202,9 @@ wealth_change_since_aug3 = net_worth - aug3_val
 # ----------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("💰 Total Family Net Worth", f"₹{net_worth:,.2f}", delta=f"₹{wealth_change_since_aug3:,.2f} since Aug 3")
-m2.metric("📈 Stocks Current Value", f"₹{total_stock_val:,.2f}", delta=f"₹{stock_gain:,.2f}")
-m3.metric("🏦 FDs & Bonds (Total Value)", f"₹{total_bonds_val:,.2f}", delta=f"₹{total_bonds_earned_interest:,.2f} Earned")
-m4.metric("💵 Total Monthly Cashflow", f"₹{total_monthly_income:,.2f}", delta=f"₹{total_monthly_payout:,.2f} from FDs")
+m2.metric("📈 Active Stocks Value", f"₹{total_stock_val:,.2f}", delta=f"₹{stock_gain:,.2f} Unrealized")
+m3.metric("🏦 FDs & Bonds Value", f"₹{total_bonds_val:,.2f}", delta=f"₹{total_bonds_earned_interest:,.2f} Interest")
+m4.metric("💵 Total Monthly Income", f"₹{total_monthly_income:,.2f}", delta=f"₹{total_monthly_payout:,.2f} from FDs")
 
 st.markdown("---")
 
@@ -187,12 +212,12 @@ st.markdown("---")
 # 7. DASHBOARD TABS
 # ----------------------------------------------------
 tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs([
-    "📊 Overall Summary", "📈 Stocks Portfolio", "📜 FDs & Bonds", "💵 Income Tracker"
+    "📊 Overall Summary", "📈 Stocks & Trades", "📜 FDs & Bonds", "💵 Income Tracker"
 ])
 
 # TAB 1: OVERALL SUMMARY
 with tab_overview:
-    st.subheader("📈 Day-by-Day Family Wealth Growth (Daily Closing Prices from Aug 3, 2026)")
+    st.subheader("📈 Day-by-Day Family Wealth Growth (Daily Closing Prices)")
     
     if not daily_wealth_series.empty:
         daily_wealth_df = daily_wealth_series.reset_index()
@@ -229,14 +254,14 @@ with tab_overview:
         )
         st.plotly_chart(fig_donut, use_container_width=True)
 
-# TAB 2: STOCKS PORTFOLIO
+# TAB 2: STOCKS & TRADES
 with tab_stocks:
     if not stocks_df.empty:
         col_s1, col_s2 = st.columns(2)
         with col_s1:
             fig_stock_pie = px.pie(
                 stocks_df, values='Total_Value', names='Ticker', 
-                title="Stock Portfolio Allocation", hole=0.3
+                title="Active Stock Portfolio Allocation", hole=0.3
             )
             st.plotly_chart(fig_stock_pie, use_container_width=True)
         with col_s2:
@@ -248,10 +273,10 @@ with tab_stocks:
             
         st.markdown("---")
         
-        # TABLE HEADER WITH INTEGRATED DROPDOWN SELECTOR
+        # TABLE HEADER WITH TIMEFRAME SELECTOR
         col_tbl_title, col_tbl_select = st.columns([2, 1])
         with col_tbl_title:
-            st.subheader("📋 Detailed Stock Holdings Table")
+            st.subheader("📋 Active Stock Holdings Table")
         with col_tbl_select:
             selected_tf = st.selectbox(
                 "Change Column Timeframe:",
@@ -277,7 +302,8 @@ with tab_stocks:
         col_label = f"Change ({selected_tf})"
         display_stocks_df[col_label] = change_values
         
-        display_cols = ['Ticker', 'Shares', 'Buy_Price', 'Current_Price', col_label, 'Total_Value', 'P/L (₹)', 'P/L (%)']
+        display_cols = ['Ticker', 'Shares', 'Buy_Price', 'Current_Price', col_label, 'Total_Value', 'P/L (₹)', 'P/L (%)', 'Remarks']
+        display_cols = [c for c in display_cols if c in display_stocks_df.columns]
         display_stocks_df = display_stocks_df[display_cols]
         
         st.dataframe(
@@ -294,13 +320,26 @@ with tab_stocks:
             ),
             use_container_width=True
         )
-        
-        st.markdown("---")
 
-        # ----------------------------------------------------
-        # SINGLE STOCK DEEP DIVE CHART
-        # ----------------------------------------------------
-        st.subheader("🔍 Single Stock Chart Deep-Dive")
+    # FEATURE B: CLOSED POSITIONS & REALIZED PNL SECTION
+    st.markdown("---")
+    st.subheader("🏁 Closed Trades & Realized P&L Tracker")
+    if not closed_df.empty:
+        col_c1, col_c2 = st.columns([1, 2])
+        col_c1.metric("Lifetime Realized P&L", f"₹{total_realized_pnl:,.2f}")
+        
+        with col_c2:
+            st.caption("Logs of stocks you exited and locked-in profits/losses for.")
+            
+        st.dataframe(closed_df, use_container_width=True)
+    else:
+        st.info("No exited trades logged yet. To log sold stocks, set their Status to 'Sold' or Shares to 0 in Google Sheets.")
+
+    st.markdown("---")
+
+    # SINGLE STOCK DEEP DIVE CHART
+    st.subheader("🔍 Single Stock Chart Deep-Dive")
+    if not stocks_df.empty:
         selected_stock = st.selectbox("Select a stock to view its price chart:", stocks_df['Ticker'].tolist())
         
         if selected_stock:
@@ -312,55 +351,31 @@ with tab_stocks:
                 fig_stock_line.update_traces(line_color='#3B82F6', line_width=2)
                 st.plotly_chart(fig_stock_line, use_container_width=True)
 
-        st.markdown("---")
+    st.markdown("---")
 
-        # ----------------------------------------------------
-        # AGGREGATED PORTFOLIO NEWS & CORPORATE ACTIONS (±1 Month Filter) - BELOW CHART
-        # ----------------------------------------------------
-        st.subheader("📰 Whole Portfolio News & Corporate Actions (±1 Month)")
-        
-        today_dt = datetime.today()
-        one_month_ago = today_dt - timedelta(days=30)
-        one_month_ahead = today_dt + timedelta(days=30)
-        
-        col_all_actions, col_all_news = st.columns([1, 1])
-        
-        all_actions = []
-        all_news = []
-        
-        # Loop through all portfolio tickers to aggregate events
+    # NEWS & CORPORATE ACTIONS BELOW CHART
+    st.subheader("📰 Whole Portfolio News & Corporate Actions (±1 Month)")
+    today_dt = datetime.today()
+    one_month_ago = today_dt - timedelta(days=30)
+    one_month_ahead = today_dt + timedelta(days=30)
+    
+    col_all_actions, col_all_news = st.columns([1, 1])
+    all_actions, all_news = [], []
+    
+    if not stocks_df.empty:
         for t in stocks_df['Ticker'].unique():
             stk = yf.Ticker(t)
-            
-            # Dividends within ±1 month
+            # Dividends
             try:
                 divs = stk.dividends
                 if not divs.empty:
                     for date_idx, val in divs.items():
                         event_dt = pd.to_datetime(date_idx).tz_localize(None) if pd.to_datetime(date_idx).tzinfo else pd.to_datetime(date_idx)
                         if one_month_ago <= event_dt <= one_month_ahead:
-                            all_actions.append({
-                                'Ticker': t, 'Type': 'Dividend', 
-                                'Detail': f"₹{val:.2f}", 'Date': event_dt.strftime('%Y-%m-%d')
-                            })
-            except Exception:
-                pass
-                
-            # Stock Splits within ±1 month
-            try:
-                splits = stk.splits
-                if not splits.empty:
-                    for date_idx, val in splits.items():
-                        event_dt = pd.to_datetime(date_idx).tz_localize(None) if pd.to_datetime(date_idx).tzinfo else pd.to_datetime(date_idx)
-                        if one_month_ago <= event_dt <= one_month_ahead:
-                            all_actions.append({
-                                'Ticker': t, 'Type': 'Split', 
-                                'Detail': f"{val}", 'Date': event_dt.strftime('%Y-%m-%d')
-                            })
-            except Exception:
-                pass
-
-            # News articles within ±1 month
+                            all_actions.append({'Ticker': t, 'Type': 'Dividend', 'Detail': f"₹{val:.2f}", 'Date': event_dt.strftime('%Y-%m-%d')})
+            except Exception: pass
+            
+            # News
             try:
                 news_items = stk.news
                 if news_items:
@@ -369,36 +384,29 @@ with tab_stocks:
                         if pub_time:
                             pub_dt = datetime.fromtimestamp(pub_time)
                             if one_month_ago <= pub_dt <= one_month_ahead:
-                                all_news.append({
-                                    'Ticker': t,
-                                    'Title': item.get('title', 'News Item'),
-                                    'Link': item.get('link', '#'),
-                                    'Publisher': item.get('publisher', 'Financial News'),
-                                    'Date': pub_dt.strftime('%Y-%m-%d')
-                                })
-            except Exception:
-                pass
+                                all_news.append({'Ticker': t, 'Title': item.get('title', 'News Item'), 'Link': item.get('link', '#'), 'Publisher': item.get('publisher', 'Financial News'), 'Date': pub_dt.strftime('%Y-%m-%d')})
+            except Exception: pass
 
-        with col_all_actions:
-            st.markdown("#### 🎁 Corporate Actions (Past & Upcoming 30 Days)")
-            with st.container(height=350):
-                if all_actions:
-                    actions_df = pd.DataFrame(all_actions).sort_values(by='Date', ascending=False)
-                    for _, act in actions_df.iterrows():
-                        st.markdown(f"• **[{act['Ticker']}]** {act['Type']}: `{act['Detail']}` on **{act['Date']}**")
-                else:
-                    st.write("No corporate actions found within the last or upcoming 30 days.")
+    with col_all_actions:
+        st.markdown("#### 🎁 Corporate Actions (Past & Upcoming 30 Days)")
+        with st.container(height=350):
+            if all_actions:
+                actions_df = pd.DataFrame(all_actions).sort_values(by='Date', ascending=False)
+                for _, act in actions_df.iterrows():
+                    st.markdown(f"• **[{act['Ticker']}]** {act['Type']}: `{act['Detail']}` on **{act['Date']}**")
+            else:
+                st.write("No corporate actions found within 30 days.")
 
-        with col_all_news:
-            st.markdown("#### 🗞️ Portfolio News Headlines (Past 30 Days)")
-            with st.container(height=350):
-                if all_news:
-                    news_df = pd.DataFrame(all_news).sort_values(by='Date', ascending=False)
-                    for _, n in news_df.iterrows():
-                        st.markdown(f"• **[{n['Ticker']}]** [{n['Title']}]({n['Link']})")
-                        st.caption(f"Source: {n['Publisher']} | Date: {n['Date']}")
-                else:
-                    st.write("No news items found within the last 30 days.")
+    with col_all_news:
+        st.markdown("#### 🗞️ Portfolio News Headlines (Past 30 Days)")
+        with st.container(height=350):
+            if all_news:
+                news_df = pd.DataFrame(all_news).sort_values(by='Date', ascending=False)
+                for _, n in news_df.iterrows():
+                    st.markdown(f"• **[{n['Ticker']}]** [{n['Title']}]({n['Link']})")
+                    st.caption(f"Source: {n['Publisher']} | Date: {n['Date']}")
+            else:
+                st.write("No news items found within 30 days.")
 
 # TAB 3: FDS & BONDS
 with tab_bonds:
@@ -423,26 +431,21 @@ with tab_bonds:
                 'Est. Monthly Payout (₹)': '₹{:.2f}',
                 'Total Interest Earned (₹)': '₹{:.2f}',
                 'Current Value (₹)': '₹{:.2f}'
-            }).map(
-                lambda _: 'color: #FF9100; font-weight: bold;', subset=['Interest_Rate_Pct']
-            ).map(
-                lambda _: 'color: #00B0FF; font-weight: bold;', subset=['Est. Monthly Payout (₹)']
-            ).map(
-                lambda _: 'color: #00E676; font-weight: bold;', subset=['Total Interest Earned (₹)']
-            ).map(
-                lambda _: 'color: #FFD700; font-weight: bold;', subset=['Current Value (₹)']
-            ), 
+            }), 
             use_container_width=True
         )
     else:
         st.info("No FDs or Bonds data loaded.")
 
-# TAB 4: INCOME TRACKER
+# TAB 4: INCOME TRACKER (WITH NOTES/REMARKS SUPPORT)
 with tab_income:
     if not income_df.empty:
-        st.subheader("Income Sources")
+        st.subheader("💵 Income Sources & Important Notes")
+        
         fig_inc = px.pie(income_df, values='Amount', names='Source', title="Income Breakdown")
         st.plotly_chart(fig_inc, use_container_width=True)
+        
+        st.markdown("### 📋 Income Breakdown & Notes Table")
         st.dataframe(income_df, use_container_width=True)
     else:
         st.info("No Income data loaded.")
