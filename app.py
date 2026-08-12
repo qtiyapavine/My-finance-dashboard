@@ -2,6 +2,7 @@ from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import streamlit as st
+import yfinance as yf
 
 # ----------------------------------------------------
 # 1. HARDCODED GOOGLE SHEET CSV LINKS
@@ -9,6 +10,9 @@ import streamlit as st
 STOCKS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=0&single=true&output=csv"
 BONDS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=784070610&single=true&output=csv"
 INCOME_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=877997891&single=true&output=csv"
+
+# Start date for daily line chart
+START_HIST_DATE = "2026-08-03"
 
 # ----------------------------------------------------
 # 2. STREAMLIT CONFIGURATION
@@ -28,9 +32,9 @@ with st.sidebar:
     if st.button("🔄 Refresh Data"):
         st.cache_data.clear()
         st.rerun()
-    st.caption("Data updates directly from your Google Sheets in real time.")
+    st.caption("Data syncs automatically with Google Sheets.")
 
-# Global Metrics Counters
+# Global Variables
 total_stock_val = 0.0
 total_stock_invested = 0.0
 total_bonds_val = 0.0
@@ -83,16 +87,18 @@ if BONDS_CSV:
         st.sidebar.error(f"Error loading FDs & Bonds: {e}")
 
 # ----------------------------------------------------
-# 4. DATA PROCESSING: STOCKS
+# 4. DATA PROCESSING: STOCKS & DAILY HISTORICAL PRICES
 # ----------------------------------------------------
 stocks_df = pd.DataFrame()
 closed_df = pd.DataFrame()
+daily_closing_wealth_df = pd.DataFrame()
+daily_wealth_series = pd.Series(dtype=float)
 
 if STOCKS_CSV:
     try:
         raw_stocks_df = pd.read_csv(STOCKS_CSV)
 
-        # Separate Active and Closed/Sold positions
+        # Separate Active and Closed positions
         if "Status" in raw_stocks_df.columns:
             stocks_df = raw_stocks_df[
                 raw_stocks_df["Status"].astype(str).str.lower() != "sold"
@@ -106,7 +112,6 @@ if STOCKS_CSV:
         else:
             stocks_df = raw_stocks_df.copy()
 
-        # Active Stock Calculations
         if not stocks_df.empty:
             for col in ["Shares", "Buy_Price", "Current_Price"]:
                 if col in stocks_df.columns:
@@ -114,6 +119,7 @@ if STOCKS_CSV:
                         stocks_df[col], errors="coerce"
                     ).fillna(0)
 
+            # Live current valuations from Google Sheet Current_Price
             stocks_df["Total_Value"] = (
                 stocks_df["Shares"] * stocks_df["Current_Price"]
             )
@@ -133,13 +139,37 @@ if STOCKS_CSV:
             total_stock_invested = stocks_df["Invested_Val"].sum()
             total_stock_val = stocks_df["Total_Value"].sum()
 
-        # Closed Stock Positions
+            # Fetch daily historical close prices via yfinance for the timeline chart
+            for _, row in stocks_df.iterrows():
+                ticker = str(row["Ticker"]).strip()
+                yf_ticker = (
+                    f"{ticker}.NS" if not ticker.endswith((".NS", ".BO")) else ticker
+                )
+                shares = float(row["Shares"])
+                try:
+                    hist_data = yf.Ticker(yf_ticker).history(
+                        start=START_HIST_DATE
+                    )
+                    if not hist_data.empty:
+                        daily_stock_val = hist_data["Close"] * shares
+                        daily_stock_val.index = daily_stock_val.index.strftime(
+                            "%Y-%m-%d"
+                        )
+                        daily_closing_wealth_df[ticker] = daily_stock_val
+                except Exception:
+                    pass
+
+            if not daily_closing_wealth_df.empty:
+                daily_wealth_series = (
+                    daily_closing_wealth_df.sum(axis=1) + total_bonds_val
+                )
+
         if not closed_df.empty and "Realized_PnL" in closed_df.columns:
             total_realized_pnl = pd.to_numeric(
                 closed_df["Realized_PnL"], errors="coerce"
             ).sum()
     except Exception as e:
-        st.sidebar.error(f"Error loading Stocks data: {e}")
+        st.sidebar.error(f"Error loading Stocks: {e}")
 
 # ----------------------------------------------------
 # 5. DATA PROCESSING: INCOME
@@ -164,15 +194,23 @@ if INCOME_CSV:
     except Exception as e:
         st.sidebar.error(f"Error loading Income: {e}")
 
-# Net Worth Calculation
+# Net Worth Calculations
 net_worth = total_stock_val + total_bonds_val
 stock_gain = total_stock_val - total_stock_invested
+aug3_val = (
+    daily_wealth_series.iloc[0] if not daily_wealth_series.empty else net_worth
+)
+wealth_change_since_aug3 = net_worth - aug3_val
 
 # ----------------------------------------------------
 # 6. TOP SUMMARY METRIC CARDS
 # ----------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
-m1.metric("💰 Total Family Net Worth", f"₹{net_worth:,.2f}")
+m1.metric(
+    "💰 Total Family Net Worth",
+    f"₹{net_worth:,.2f}",
+    delta=f"₹{wealth_change_since_aug3:,.2f} since Aug 3",
+)
 m2.metric(
     "📈 Active Stocks Value",
     f"₹{total_stock_val:,.2f}",
@@ -181,12 +219,12 @@ m2.metric(
 m3.metric(
     "🏦 FDs & Bonds Value",
     f"₹{total_bonds_val:,.2f}",
-    delta=f"₹{total_bonds_earned_interest:,.2f} Interest Earned",
+    delta=f"₹{total_bonds_earned_interest:,.2f} Interest",
 )
 m4.metric(
     "💵 Total Est. Monthly Income",
     f"₹{total_monthly_income:,.2f}",
-    delta=f"₹{total_monthly_payout:,.2f} from FD Cash Flow",
+    delta=f"₹{total_monthly_payout:,.2f} from FDs",
 )
 
 st.markdown("---")
@@ -200,7 +238,44 @@ tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs(
 
 # TAB 1: OVERALL SUMMARY
 with tab_overview:
-    st.subheader("Asset Allocation Summary")
+    # 1. Day-by-Day Family Wealth Line Chart
+    st.subheader("📈 Day-by-Day Family Wealth Growth (Daily Closing Prices)")
+
+    if not daily_wealth_series.empty:
+        daily_wealth_df = daily_wealth_series.reset_index()
+        daily_wealth_df.columns = ["Date", "Total Wealth (₹)"]
+
+        fig_wealth = px.line(
+            daily_wealth_df,
+            x="Date",
+            y="Total Wealth (₹)",
+            title="Daily Total Family Net Worth Trend",
+            markers=True,
+        )
+        fig_wealth.update_traces(
+            line_color="#00D4B1", line_width=3, marker_size=8
+        )
+        fig_wealth.update_layout(hovermode="x unified")
+        st.plotly_chart(fig_wealth, use_container_width=True)
+
+        # Day-by-Day Wealth Numbers Expander
+        with st.expander("📄 View Day-by-Day Wealth Breakdown Numbers"):
+            # Detailed breakdown table combining stocks history + FDs/Bonds
+            detailed_daily_df = daily_closing_wealth_df.copy()
+            detailed_daily_df["FDs & Bonds (₹)"] = total_bonds_val
+            detailed_daily_df["Total Net Worth (₹)"] = daily_wealth_series
+
+            st.dataframe(
+                detailed_daily_df.style.format("₹{:,.2f}"),
+                use_container_width=True,
+            )
+    else:
+        st.info("Daily market history timeline is loading or unavailable.")
+
+    st.markdown("---")
+
+    # 2. Asset Allocation Breakdown & Portfolio Table
+    st.subheader("Asset Allocation Breakdown")
     if net_worth > 0:
         alloc_data = {
             "Asset Type": ["Stocks & Equities", "FDs & Fixed Income"],
@@ -212,12 +287,11 @@ with tab_overview:
             names="Asset Type",
             hole=0.45,
             color_discrete_sequence=["#00D4B1", "#3B82F6"],
-            title="Overall Net Worth Allocation",
+            title="Overall Net Worth Distribution",
         )
         st.plotly_chart(fig_donut, use_container_width=True)
 
-        # Overview Table
-        st.markdown("### Portfolio Breakdown")
+        st.markdown("### Portfolio Asset Summary")
         summary_df = pd.DataFrame(
             [
                 {
@@ -261,7 +335,7 @@ with tab_stocks:
             st.plotly_chart(fig_stock_bar, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("📋 Active Stock Holdings")
+        st.subheader("📋 Active Stock Holdings Table")
         display_cols = [
             "Ticker",
             "Shares",
@@ -283,12 +357,21 @@ with tab_stocks:
                     "P/L (₹)": "₹{:+.2f}",
                     "P/L (%)": "{:+.2f}%",
                 }
+            ).map(
+                lambda v: (
+                    "color: #00E676; font-weight: bold;"
+                    if v > 0
+                    else (
+                        "color: #FF5252; font-weight: bold;" if v < 0 else ""
+                    )
+                ),
+                subset=["P/L (₹)", "P/L (%)"],
             ),
             use_container_width=True,
         )
 
     st.markdown("---")
-    st.subheader("🏁 Exited / Closed Trades & Realized P&L")
+    st.subheader("🏁 Closed Trades & Realized P&L")
     if not closed_df.empty:
         st.metric("Total Realized Profit / Loss", f"₹{total_realized_pnl:,.2f}")
         st.dataframe(closed_df, use_container_width=True)
@@ -308,7 +391,18 @@ with tab_bonds:
             barmode="group",
         )
         st.plotly_chart(fig_bonds, use_container_width=True)
-        st.dataframe(bonds_df, use_container_width=True)
+        st.dataframe(
+            bonds_df.style.format(
+                {
+                    "Invested_Amount": "₹{:.2f}",
+                    "Interest_Rate_Pct": "{:.2f}%",
+                    "Est. Monthly Payout (₹)": "₹{:.2f}",
+                    "Total Interest Earned (₹)": "₹{:.2f}",
+                    "Current Value (₹)": "₹{:.2f}",
+                }
+            ),
+            use_container_width=True,
+        )
 
 # TAB 4: INCOME TRACKER
 with tab_income:
