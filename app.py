@@ -10,20 +10,17 @@ STOCKS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNu
 BONDS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=784070610&single=true&output=csv"
 INCOME_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=877997891&single=true&output=csv"
 
-# Optional: Add your published Income_Log tab CSV URL here
-LOGGED_INCOME_CSV = ""  # Replace with published URL for historical income logs
-
 # ----------------------------------------------------
 # 2. STREAMLIT CONFIGURATION
 # ----------------------------------------------------
 st.set_page_config(
-    page_title="Family Wealth & Total Income Tracker",
+    page_title="Family Wealth Dashboard",
     page_icon="👨‍👩‍👧‍👦",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
-st.title("👨‍👩‍👧‍👦 Family Wealth & Income Tracker")
+st.title("👨‍👩‍👧‍👦 Family's Overall Wealth & Portfolio Dashboard")
 
 # Sidebar Controls
 with st.sidebar:
@@ -31,9 +28,9 @@ with st.sidebar:
     if st.button("🔄 Refresh Data"):
         st.cache_data.clear()
         st.rerun()
-    st.caption("Data syncs automatically with Google Sheets.")
+    st.caption("Data updates directly from your Google Sheets in real time.")
 
-# Global Variables
+# Global Metrics Counters
 total_stock_val = 0.0
 total_stock_invested = 0.0
 total_bonds_val = 0.0
@@ -41,10 +38,9 @@ total_bonds_earned_interest = 0.0
 total_monthly_payout = 0.0
 total_monthly_income = 0.0
 total_realized_pnl = 0.0
-total_historical_income = 0.0
 
 # ----------------------------------------------------
-# 3. BONDS & FDS PROCESSING
+# 3. DATA PROCESSING: FDs & BONDS
 # ----------------------------------------------------
 bonds_df = pd.DataFrame()
 if BONDS_CSV:
@@ -55,8 +51,8 @@ if BONDS_CSV:
         today = datetime.today()
 
         for _, row in bonds_df.iterrows():
-            principal = float(row["Invested_Amount"])
-            rate = float(row["Interest_Rate_Pct"]) / 100.0
+            principal = float(row.get("Invested_Amount", 0))
+            rate = float(row.get("Interest_Rate_Pct", 0)) / 100.0
 
             monthly_income = (principal * rate) / 12.0
             monthly_payout_list.append(monthly_income)
@@ -87,7 +83,7 @@ if BONDS_CSV:
         st.sidebar.error(f"Error loading FDs & Bonds: {e}")
 
 # ----------------------------------------------------
-# 4. STOCKS PROCESSING
+# 4. DATA PROCESSING: STOCKS
 # ----------------------------------------------------
 stocks_df = pd.DataFrame()
 closed_df = pd.DataFrame()
@@ -96,6 +92,7 @@ if STOCKS_CSV:
     try:
         raw_stocks_df = pd.read_csv(STOCKS_CSV)
 
+        # Separate Active and Closed/Sold positions
         if "Status" in raw_stocks_df.columns:
             stocks_df = raw_stocks_df[
                 raw_stocks_df["Status"].astype(str).str.lower() != "sold"
@@ -109,6 +106,7 @@ if STOCKS_CSV:
         else:
             stocks_df = raw_stocks_df.copy()
 
+        # Active Stock Calculations
         if not stocks_df.empty:
             for col in ["Shares", "Buy_Price", "Current_Price"]:
                 if col in stocks_df.columns:
@@ -135,54 +133,43 @@ if STOCKS_CSV:
             total_stock_invested = stocks_df["Invested_Val"].sum()
             total_stock_val = stocks_df["Total_Value"].sum()
 
+        # Closed Stock Positions
         if not closed_df.empty and "Realized_PnL" in closed_df.columns:
             total_realized_pnl = pd.to_numeric(
                 closed_df["Realized_PnL"], errors="coerce"
             ).sum()
     except Exception as e:
-        st.sidebar.error(f"Error loading Stocks: {e}")
+        st.sidebar.error(f"Error loading Stocks data: {e}")
 
 # ----------------------------------------------------
-# 5. INCOME & LOGGED INCOME PROCESSING
+# 5. DATA PROCESSING: INCOME
 # ----------------------------------------------------
 income_df = pd.DataFrame()
-income_log_df = pd.DataFrame()
-
 if INCOME_CSV:
     try:
         income_df = pd.read_csv(INCOME_CSV)
         monthly_total = 0.0
 
         for _, row in income_df.iterrows():
-            amt = float(row["Amount"])
-            freq = str(row["Frequency"]).strip().lower()
+            amt = float(row.get("Amount", 0))
+            freq = str(row.get("Frequency", "")).strip().lower()
             if freq == "monthly":
                 monthly_total += amt
             elif freq == "yearly":
                 monthly_total += amt / 12
             else:
                 monthly_total += amt
+
         total_monthly_income = monthly_total + total_monthly_payout
     except Exception as e:
-        st.sidebar.error(f"Error loading Income sources: {e}")
+        st.sidebar.error(f"Error loading Income: {e}")
 
-if LOGGED_INCOME_CSV:
-    try:
-        income_log_df = pd.read_csv(LOGGED_INCOME_CSV)
-        income_log_df["Amount"] = pd.to_numeric(
-            income_log_df["Amount"], errors="coerce"
-        ).fillna(0)
-        income_log_df["Date"] = pd.to_datetime(income_log_df["Date"])
-        income_log_df["Year-Month"] = income_log_df["Date"].dt.strftime("%Y-%m")
-        total_historical_income = income_log_df["Amount"].sum()
-    except Exception as e:
-        st.sidebar.error(f"Error loading Income Log: {e}")
-
+# Net Worth Calculation
 net_worth = total_stock_val + total_bonds_val
 stock_gain = total_stock_val - total_stock_invested
 
 # ----------------------------------------------------
-# 6. TOP METRICS
+# 6. TOP SUMMARY METRIC CARDS
 # ----------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
 m1.metric("💰 Total Family Net Worth", f"₹{net_worth:,.2f}")
@@ -194,46 +181,62 @@ m2.metric(
 m3.metric(
     "🏦 FDs & Bonds Value",
     f"₹{total_bonds_val:,.2f}",
-    delta=f"₹{total_bonds_earned_interest:,.2f} Interest",
+    delta=f"₹{total_bonds_earned_interest:,.2f} Interest Earned",
 )
 m4.metric(
-    "💵 Total Cumulative Income Logged",
-    f"₹{total_historical_income if total_historical_income > 0 else (total_monthly_income * 12):,.2f}",
-    delta=f"₹{total_monthly_income:,.2f} Est. Monthly",
+    "💵 Total Est. Monthly Income",
+    f"₹{total_monthly_income:,.2f}",
+    delta=f"₹{total_monthly_payout:,.2f} from FD Cash Flow",
 )
 
 st.markdown("---")
 
 # ----------------------------------------------------
-# 7. DASHBOARD TABS
+# 7. MAIN DASHBOARD TABS
 # ----------------------------------------------------
 tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs(
-    [
-        "📊 Asset Summary",
-        "📈 Stocks & Trades",
-        "📜 FDs & Bonds",
-        "💵 Total Income Tracker",
-    ]
+    ["📊 Overall Summary", "📈 Stocks & Trades", "📜 FDs & Bonds", "💵 Income Tracker"]
 )
 
-# TAB 1: ASSET OVERVIEW
+# TAB 1: OVERALL SUMMARY
 with tab_overview:
-    st.subheader("Asset Allocation Breakdown")
+    st.subheader("Asset Allocation Summary")
     if net_worth > 0:
         alloc_data = {
-            "Asset Type": ["Stocks", "FDs & Bonds"],
+            "Asset Type": ["Stocks & Equities", "FDs & Fixed Income"],
             "Value": [total_stock_val, total_bonds_val],
         }
         fig_donut = px.pie(
             alloc_data,
             values="Value",
             names="Asset Type",
-            hole=0.4,
+            hole=0.45,
             color_discrete_sequence=["#00D4B1", "#3B82F6"],
+            title="Overall Net Worth Allocation",
         )
         st.plotly_chart(fig_donut, use_container_width=True)
 
-# TAB 2: STOCKS
+        # Overview Table
+        st.markdown("### Portfolio Breakdown")
+        summary_df = pd.DataFrame(
+            [
+                {
+                    "Asset Class": "Stocks & Equities",
+                    "Invested Amount": f"₹{total_stock_invested:,.2f}",
+                    "Current Value": f"₹{total_stock_val:,.2f}",
+                    "Total Gains / Interest": f"₹{stock_gain:,.2f}",
+                },
+                {
+                    "Asset Class": "FDs & Bonds",
+                    "Invested Amount": f"₹{(total_bonds_val - total_bonds_earned_interest):,.2f}",
+                    "Current Value": f"₹{total_bonds_val:,.2f}",
+                    "Total Gains / Interest": f"₹{total_bonds_earned_interest:,.2f}",
+                },
+            ]
+        )
+        st.dataframe(summary_df, use_container_width=True)
+
+# TAB 2: STOCKS & TRADES
 with tab_stocks:
     if not stocks_df.empty:
         col_s1, col_s2 = st.columns(2)
@@ -242,8 +245,8 @@ with tab_stocks:
                 stocks_df,
                 values="Total_Value",
                 names="Ticker",
-                title="Active Stock Portfolio Allocation",
-                hole=0.3,
+                title="Stock Portfolio Allocation",
+                hole=0.35,
             )
             st.plotly_chart(fig_stock_pie, use_container_width=True)
         with col_s2:
@@ -252,13 +255,13 @@ with tab_stocks:
                 x="Ticker",
                 y="Total_Value",
                 color="P/L (₹)",
-                title="Value & Gain/Loss per Stock",
+                title="Stock Values & Unrealized Gain/Loss",
                 color_continuous_scale="Blugrn",
             )
             st.plotly_chart(fig_stock_bar, use_container_width=True)
 
         st.markdown("---")
-        st.subheader("📋 Active Stock Holdings Table")
+        st.subheader("📋 Active Stock Holdings")
         display_cols = [
             "Ticker",
             "Shares",
@@ -285,14 +288,14 @@ with tab_stocks:
         )
 
     st.markdown("---")
-    st.subheader("🏁 Closed Trades & Realized P&L Tracker")
+    st.subheader("🏁 Exited / Closed Trades & Realized P&L")
     if not closed_df.empty:
-        st.metric("Lifetime Realized P&L", f"₹{total_realized_pnl:,.2f}")
+        st.metric("Total Realized Profit / Loss", f"₹{total_realized_pnl:,.2f}")
         st.dataframe(closed_df, use_container_width=True)
     else:
-        st.info("No exited trades logged yet.")
+        st.info("No closed trades recorded.")
 
-# TAB 3: BONDS
+# TAB 3: FDS & BONDS
 with tab_bonds:
     if not bonds_df.empty:
         st.subheader("🏦 Fixed Deposits & Bond Holdings")
@@ -301,66 +304,21 @@ with tab_bonds:
             x="Name",
             y="Current Value (₹)",
             color="Asset_Type",
-            title="Invested vs Earned Value per Asset",
+            title="FD & Bond Current Values",
             barmode="group",
         )
         st.plotly_chart(fig_bonds, use_container_width=True)
         st.dataframe(bonds_df, use_container_width=True)
 
-# TAB 4: TOTAL CUMULATIVE INCOME TRACKER
+# TAB 4: INCOME TRACKER
 with tab_income:
-    st.subheader("💵 Total Overall Income Tracker")
-
-    col_i1, col_i2, col_i3 = st.columns(3)
-    col_i1.metric(
-        "Est. Total Monthly Cash Flow", f"₹{total_monthly_income:,.2f}/mo"
-    )
-    col_i2.metric(
-        "FD Passive Monthly Income", f"₹{total_monthly_payout:,.2f}/mo"
-    )
-    col_i3.metric(
-        "Total Lifetime FD Interest", f"₹{total_bonds_earned_interest:,.2f}"
-    )
-
-    st.markdown("---")
-
-    # Historical Income Chart & Log Table (if Income_Log CSV provided)
-    if not income_log_df.empty:
-        st.markdown("### 📈 Cumulative Income Over Time (Monthly Received)")
-        monthly_income_summary = (
-            income_log_df.groupby("Year-Month")["Amount"].sum().reset_index()
-        )
-
-        fig_inc_line = px.bar(
-            monthly_income_summary,
-            x="Year-Month",
-            y="Amount",
-            title="Monthly Total Income Received (₹)",
-            text_auto=".2s",
-            color_discrete_sequence=["#00D4B1"],
-        )
-        st.plotly_chart(fig_inc_line, use_container_width=True)
-
-        st.markdown("### 📋 Complete Income Log History")
-        st.dataframe(
-            income_log_df.sort_values(by="Date", ascending=False).style.format(
-                {"Amount": "₹{:,.2f}"}
-            ),
-            use_container_width=True,
-        )
-    else:
-        st.info(
-            "💡 **Tip to track total income over time:** Create a new tab named `Income_Log` in your Google Sheet with columns (`Date`, `Source`, `Amount`, `Category`, `Remarks`), publish it to CSV, and paste its URL into `LOGGED_INCOME_CSV`."
-        )
-
-    st.markdown("---")
-    st.markdown("### ⚙️ Recurring Income Sources Breakdown")
     if not income_df.empty:
+        st.subheader("💵 Monthly Recurring Income Breakdown")
         fig_inc = px.pie(
             income_df,
             values="Amount",
             names="Source",
-            title="Recurring Monthly Income Breakdown",
+            title="Income Sources",
         )
         st.plotly_chart(fig_inc, use_container_width=True)
         st.dataframe(income_df, use_container_width=True)
