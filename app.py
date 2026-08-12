@@ -1,8 +1,7 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import pandas as pd
 import plotly.express as px
 import streamlit as st
-import yfinance as yf
 
 # ----------------------------------------------------
 # 1. HARDCODED GOOGLE SHEET CSV LINKS
@@ -10,9 +9,6 @@ import yfinance as yf
 STOCKS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=0&single=true&output=csv"
 BONDS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=784070610&single=true&output=csv"
 INCOME_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=877997891&single=true&output=csv"
-
-# Start date for daily line chart
-START_HIST_DATE = "2026-08-03"
 
 # ----------------------------------------------------
 # 2. STREAMLIT PAGE CONFIGURATION
@@ -22,19 +18,6 @@ st.set_page_config(
     page_icon="👨‍👩‍👧‍👦",
     layout="wide",
     initial_sidebar_state="expanded",
-)
-
-# Custom Styling
-st.markdown(
-    """
-    <style>
-    .main { padding: 1rem 2rem; }
-    div[data-testid="stMetricValue"] { font-size: 28px; font-weight: bold; color: #00D4B1; }
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { border-radius: 4px; padding: 10px 20px; font-weight: bold; }
-    </style>
-""",
-    unsafe_allow_html=True,
 )
 
 st.title("👨‍👩‍👧‍👦 Family's Overall Wealth")
@@ -63,7 +46,6 @@ bonds_df = pd.DataFrame()
 if BONDS_CSV:
     try:
         bonds_df = pd.read_csv(BONDS_CSV)
-
         earned_interest_list = []
         monthly_payout_list = []
         today = datetime.today()
@@ -72,11 +54,9 @@ if BONDS_CSV:
             principal = float(row["Invested_Amount"])
             rate = float(row["Interest_Rate_Pct"]) / 100.0
 
-            # Monthly Payout
             monthly_income = (principal * rate) / 12.0
             monthly_payout_list.append(monthly_income)
 
-            # Calculate months active
             if "Purchase_Date" in row and pd.notnull(row["Purchase_Date"]):
                 p_date = pd.to_datetime(row["Purchase_Date"])
                 months_active = (today.year - p_date.year) * 12 + (
@@ -86,8 +66,7 @@ if BONDS_CSV:
             else:
                 months_active = 0
 
-            total_earned = monthly_income * months_active
-            earned_interest_list.append(total_earned)
+            earned_interest_list.append(monthly_income * months_active)
 
         bonds_df["Est. Monthly Payout (₹)"] = monthly_payout_list
         bonds_df["Total Interest Earned (₹)"] = earned_interest_list
@@ -100,22 +79,20 @@ if BONDS_CSV:
             "Total Interest Earned (₹)"
         ].sum()
         total_monthly_payout = bonds_df["Est. Monthly Payout (₹)"].sum()
-
     except Exception as e:
         st.sidebar.error(f"Error loading FDs & Bonds: {e}")
 
 # ----------------------------------------------------
-# 4. DATA PROCESSING: STOCKS (Google Finance + yfinance for News/Hist)
+# 4. DATA PROCESSING: STOCKS (100% Google Sheets)
 # ----------------------------------------------------
 stocks_df = pd.DataFrame()
 closed_df = pd.DataFrame()
-daily_wealth_series = pd.Series(dtype=float)
 
 if STOCKS_CSV:
     try:
         raw_stocks_df = pd.read_csv(STOCKS_CSV)
 
-        # Separate Active and Sold/Closed positions
+        # Separate Active and Sold positions
         if "Status" in raw_stocks_df.columns:
             stocks_df = raw_stocks_df[
                 raw_stocks_df["Status"].astype(str).str.lower() != "sold"
@@ -129,16 +106,14 @@ if STOCKS_CSV:
         else:
             stocks_df = raw_stocks_df.copy()
 
-        # Process Active Stocks
+        # Active Stocks Calculations
         if not stocks_df.empty:
-            # Parse numeric columns safely
             for col in ["Shares", "Buy_Price", "Current_Price"]:
                 if col in stocks_df.columns:
                     stocks_df[col] = pd.to_numeric(
                         stocks_df[col], errors="coerce"
                     ).fillna(0)
 
-            # Use Google Sheet's Current_Price column directly
             stocks_df["Total_Value"] = (
                 stocks_df["Shares"] * stocks_df["Current_Price"]
             )
@@ -158,47 +133,12 @@ if STOCKS_CSV:
             total_stock_invested = stocks_df["Invested_Val"].sum()
             total_stock_val = stocks_df["Total_Value"].sum()
 
-            # Optional: Historical prices via yfinance for the timeline graph
-            daily_closing_wealth_df = pd.DataFrame()
-            for _, row in stocks_df.iterrows():
-                ticker = str(row["Ticker"]).strip()
-                # Ensure .NS suffix for Indian stocks in yfinance historical lookups
-                yf_ticker = (
-                    f"{ticker}.NS" if not ticker.endswith((".NS", ".BO")) else ticker
-                )
-                shares = float(row["Shares"])
-                try:
-                    hist_data = yf.Ticker(yf_ticker).history(
-                        start=START_HIST_DATE
-                    )
-                    if not hist_data.empty:
-                        daily_stock_val = hist_data["Close"] * shares
-                        daily_stock_val.index = daily_stock_val.index.strftime(
-                            "%Y-%m-%d"
-                        )
-                        daily_closing_wealth_df[ticker] = daily_stock_val
-                except Exception:
-                    pass
-
-            if not daily_closing_wealth_df.empty:
-                daily_wealth_series = (
-                    daily_closing_wealth_df.sum(axis=1) + total_bonds_val
-                )
-
-        # Process Closed / Realized Trades
+        # Closed Positions Calculations
         if not closed_df.empty:
             if "Realized_PnL" in closed_df.columns:
                 total_realized_pnl = pd.to_numeric(
                     closed_df["Realized_PnL"], errors="coerce"
                 ).sum()
-            elif (
-                "Sell_Price" in closed_df.columns
-                and "Buy_Price" in closed_df.columns
-            ):
-                closed_df["Realized_PnL"] = (
-                    closed_df["Sell_Price"] - closed_df["Buy_Price"]
-                ) * closed_df.get("Shares_Sold", closed_df.get("Shares", 1))
-                total_realized_pnl = closed_df["Realized_PnL"].sum()
 
     except Exception as e:
         st.sidebar.error(f"Error loading Stocks: {e}")
@@ -223,32 +163,20 @@ if INCOME_CSV:
                 monthly_total += amt
         total_monthly_income = monthly_total + total_monthly_payout
 
-        if (
-            "Notes" not in income_df.columns
-            and "Remarks" not in income_df.columns
-        ):
+        if "Notes" not in income_df.columns:
             income_df["Notes"] = "-"
-
     except Exception as e:
         st.sidebar.error(f"Error loading Income: {e}")
 
 # Net Worth Calculations
 net_worth = total_stock_val + total_bonds_val
 stock_gain = total_stock_val - total_stock_invested
-aug3_val = (
-    daily_wealth_series.iloc[0] if not daily_wealth_series.empty else net_worth
-)
-wealth_change_since_aug3 = net_worth - aug3_val
 
 # ----------------------------------------------------
 # 6. TOP METRICS
 # ----------------------------------------------------
 m1, m2, m3, m4 = st.columns(4)
-m1.metric(
-    "💰 Total Family Net Worth",
-    f"₹{net_worth:,.2f}",
-    delta=f"₹{wealth_change_since_aug3:,.2f} since Aug 3",
-)
+m1.metric("💰 Total Family Net Worth", f"₹{net_worth:,.2f}")
 m2.metric(
     "📈 Active Stocks Value",
     f"₹{total_stock_val:,.2f}",
@@ -276,39 +204,6 @@ tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs(
 
 # TAB 1: OVERALL SUMMARY
 with tab_overview:
-    st.subheader(
-        "📈 Day-by-Day Family Wealth Growth (Daily Closing Prices)"
-    )
-
-    if not daily_wealth_series.empty:
-        daily_wealth_df = daily_wealth_series.reset_index()
-        daily_wealth_df.columns = ["Date", "Total Wealth (₹)"]
-
-        fig_wealth = px.line(
-            daily_wealth_df,
-            x="Date",
-            y="Total Wealth (₹)",
-            title="Daily Total Wealth Progression",
-            markers=True,
-        )
-        fig_wealth.update_traces(
-            line_color="#00D4B1", line_width=3, marker_size=8
-        )
-        fig_wealth.update_layout(hovermode="x unified")
-        st.plotly_chart(fig_wealth, use_container_width=True)
-
-        with st.expander("📄 View Day-by-Day Wealth Numbers"):
-            st.dataframe(
-                daily_wealth_df.style.format(
-                    {"Total Wealth (₹)": "₹{:,.2f}"}
-                ),
-                use_container_width=True,
-            )
-    else:
-        st.info("Daily market history is loading or unavailable.")
-
-    st.markdown("---")
-
     st.subheader("Asset Allocation Breakdown")
     if net_worth > 0:
         alloc_data = {
@@ -349,7 +244,6 @@ with tab_stocks:
             st.plotly_chart(fig_stock_bar, use_container_width=True)
 
         st.markdown("---")
-
         st.subheader("📋 Active Stock Holdings Table")
         display_cols = [
             "Ticker",
@@ -362,10 +256,9 @@ with tab_stocks:
             "Remarks",
         ]
         display_cols = [c for c in display_cols if c in stocks_df.columns]
-        display_stocks_df = stocks_df[display_cols].copy()
 
         st.dataframe(
-            display_stocks_df.style.format(
+            stocks_df[display_cols].style.format(
                 {
                     "Buy_Price": "₹{:.2f}",
                     "Current_Price": "₹{:.2f}",
@@ -373,184 +266,23 @@ with tab_stocks:
                     "P/L (₹)": "₹{:+.2f}",
                     "P/L (%)": "{:+.2f}%",
                 }
-            ).map(
-                lambda v: (
-                    "color: #00E676; font-weight: bold;"
-                    if v > 0
-                    else (
-                        "color: #FF5252; font-weight: bold;" if v < 0 else ""
-                    )
-                ),
-                subset=["P/L (₹)", "P/L (%)"],
             ),
             use_container_width=True,
         )
 
-    # CLOSED POSITIONS & REALIZED PNL SECTION
+    # CLOSED POSITIONS & REALIZED PNL
     st.markdown("---")
     st.subheader("🏁 Closed Trades & Realized P&L Tracker")
     if not closed_df.empty:
-        col_c1, col_c2 = st.columns([1, 2])
-        col_c1.metric(
-            "Lifetime Realized P&L", f"₹{total_realized_pnl:,.2f}"
-        )
-
-        with col_c2:
-            st.caption(
-                "Logs of stocks you exited and locked-in profits/losses for."
-            )
-
+        st.metric("Lifetime Realized P&L", f"₹{total_realized_pnl:,.2f}")
         st.dataframe(closed_df, use_container_width=True)
     else:
-        st.info(
-            "No exited trades logged yet. To log sold stocks, set their Status to 'Sold' or Shares to 0 in Google Sheets."
-        )
-
-    st.markdown("---")
-
-    # SINGLE STOCK DEEP DIVE CHART
-    st.subheader("🔍 Single Stock Chart Deep-Dive")
-    if not stocks_df.empty:
-        selected_stock = st.selectbox(
-            "Select a stock to view its price chart:",
-            stocks_df["Ticker"].tolist(),
-        )
-
-        if selected_stock:
-            yf_ticker = (
-                f"{selected_stock}.NS"
-                if not selected_stock.endswith((".NS", ".BO"))
-                else selected_stock
-            )
-            stock_obj = yf.Ticker(yf_ticker)
-            time_frame = st.radio(
-                "Select Chart Period:",
-                ["1mo", "3mo", "6mo", "1y", "5y"],
-                index=0,
-                horizontal=True,
-            )
-            stock_data = stock_obj.history(period=time_frame)
-            if not stock_data.empty:
-                fig_stock_line = px.line(
-                    stock_data,
-                    y="Close",
-                    title=f"Price Chart for {selected_stock}",
-                )
-                fig_stock_line.update_traces(
-                    line_color="#3B82F6", line_width=2
-                )
-                st.plotly_chart(fig_stock_line, use_container_width=True)
-
-    st.markdown("---")
-
-    # NEWS & CORPORATE ACTIONS BELOW CHART
-    st.subheader(
-        "📰 Whole Portfolio News & Corporate Actions (±1 Month)"
-    )
-    today_dt = datetime.today()
-    one_month_ago = today_dt - timedelta(days=30)
-    one_month_ahead = today_dt + timedelta(days=30)
-
-    col_all_actions, col_all_news = st.columns([1, 1])
-    all_actions, all_news = [], []
-
-    if not stocks_df.empty:
-        for t in stocks_df["Ticker"].unique():
-            yf_ticker = f"{t}.NS" if not str(t).endswith((".NS", ".BO")) else t
-            stk = yf.Ticker(yf_ticker)
-            # Dividends
-            try:
-                divs = stk.dividends
-                if not divs.empty:
-                    for date_idx, val in divs.items():
-                        event_dt = (
-                            pd.to_datetime(date_idx).tz_localize(None)
-                            if pd.to_datetime(date_idx).tzinfo
-                            else pd.to_datetime(date_idx)
-                        )
-                        if one_month_ago <= event_dt <= one_month_ahead:
-                            all_actions.append(
-                                {
-                                    "Ticker": t,
-                                    "Type": "Dividend",
-                                    "Detail": f"₹{val:.2f}",
-                                    "Date": event_dt.strftime("%Y-%m-%d"),
-                                }
-                            )
-            except Exception:
-                pass
-
-            # News
-            try:
-                news_items = stk.news
-                if news_items:
-                    for item in news_items:
-                        pub_time = item.get("providerPublishTime", None)
-                        if pub_time:
-                            pub_dt = datetime.fromtimestamp(pub_time)
-                            if one_month_ago <= pub_dt <= one_month_ahead:
-                                all_news.append(
-                                    {
-                                        "Ticker": t,
-                                        "Title": item.get(
-                                            "title", "News Item"
-                                        ),
-                                        "Link": item.get("link", "#"),
-                                        "Publisher": item.get(
-                                            "publisher", "Financial News"
-                                        ),
-                                        "Date": pub_dt.strftime("%Y-%m-%d"),
-                                    }
-                                )
-            except Exception:
-                pass
-
-    with col_all_actions:
-        st.markdown("#### 🎁 Corporate Actions (Past & Upcoming 30 Days)")
-        with st.container(height=350):
-            if all_actions:
-                actions_df = pd.DataFrame(all_actions).sort_values(
-                    by="Date", ascending=False
-                )
-                for _, act in actions_df.iterrows():
-                    st.markdown(
-                        f"• **[{act['Ticker']}]** {act['Type']}: `{act['Detail']}` on **{act['Date']}**"
-                    )
-            else:
-                st.write("No corporate actions found within 30 days.")
-
-    with col_all_news:
-        st.markdown("#### 🗞️ Portfolio News Headlines (Past 30 Days)")
-        with st.container(height=350):
-            if all_news:
-                news_df = pd.DataFrame(all_news).sort_values(
-                    by="Date", ascending=False
-                )
-                for _, n in news_df.iterrows():
-                    st.markdown(
-                        f"• **[{n['Ticker']}]** [{n['Title']}]({n['Link']})"
-                    )
-                    st.caption(
-                        f"Source: {n['Publisher']} | Date: {n['Date']}"
-                    )
-            else:
-                st.write("No news items found within 30 days.")
+        st.info("No exited trades logged yet.")
 
 # TAB 3: FDS & BONDS
 with tab_bonds:
     if not bonds_df.empty:
         st.subheader("🏦 Fixed Deposits & Bond Holdings")
-
-        f1, f2 = st.columns(2)
-        f1.metric(
-            "Total Monthly Income from FDs", f"₹{total_monthly_payout:,.2f}/mo"
-        )
-        f2.metric(
-            "Total Interest Accumulated to Date",
-            f"₹{total_bonds_earned_interest:,.2f}",
-        )
-
-        st.markdown("---")
         fig_bonds = px.bar(
             bonds_df,
             x="Name",
@@ -560,27 +292,12 @@ with tab_bonds:
             barmode="group",
         )
         st.plotly_chart(fig_bonds, use_container_width=True)
+        st.dataframe(bonds_df, use_container_width=True)
 
-        st.dataframe(
-            bonds_df.style.format(
-                {
-                    "Invested_Amount": "₹{:.2f}",
-                    "Interest_Rate_Pct": "{:.2f}%",
-                    "Est. Monthly Payout (₹)": "₹{:.2f}",
-                    "Total Interest Earned (₹)": "₹{:.2f}",
-                    "Current Value (₹)": "₹{:.2f}",
-                }
-            ),
-            use_container_width=True,
-        )
-    else:
-        st.info("No FDs or Bonds data loaded.")
-
-# TAB 4: INCOME TRACKER (WITH NOTES/REMARKS SUPPORT)
+# TAB 4: INCOME TRACKER
 with tab_income:
     if not income_df.empty:
         st.subheader("💵 Income Sources & Important Notes")
-
         fig_inc = px.pie(
             income_df,
             values="Amount",
@@ -588,8 +305,4 @@ with tab_income:
             title="Income Breakdown",
         )
         st.plotly_chart(fig_inc, use_container_width=True)
-
-        st.markdown("### 📋 Income Breakdown & Notes Table")
         st.dataframe(income_df, use_container_width=True)
-    else:
-        st.info("No Income data loaded.")
