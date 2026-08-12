@@ -11,7 +11,7 @@ STOCKS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNu
 BONDS_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=784070610&single=true&output=csv"
 INCOME_CSV = "https://docs.google.com/spreadsheets/d/e/2PACX-1vQwaB9_f1LbFawAhNur6KYfGHmXeMK8Oa2b2uu7JTl-BupeHSSJO9wtaHePWYXxQVqFzex9qKDD51FP/pub?gid=877997891&single=true&output=csv"
 
-# Start date for daily line chart
+# Start date for daily line chart timeline
 START_HIST_DATE = "2026-08-03"
 
 # ----------------------------------------------------
@@ -87,7 +87,7 @@ if BONDS_CSV:
         st.sidebar.error(f"Error loading FDs & Bonds: {e}")
 
 # ----------------------------------------------------
-# 4. DATA PROCESSING: STOCKS & DAILY HISTORICAL PRICES
+# 4. DATA PROCESSING: STOCKS (NSE & BSE SUPPORT)
 # ----------------------------------------------------
 stocks_df = pd.DataFrame()
 closed_df = pd.DataFrame()
@@ -119,7 +119,7 @@ if STOCKS_CSV:
                         stocks_df[col], errors="coerce"
                     ).fillna(0)
 
-            # Live current valuations from Google Sheet Current_Price
+            # Live current valuations from Google Sheet
             stocks_df["Total_Value"] = (
                 stocks_df["Shares"] * stocks_df["Current_Price"]
             )
@@ -139,13 +139,23 @@ if STOCKS_CSV:
             total_stock_invested = stocks_df["Invested_Val"].sum()
             total_stock_val = stocks_df["Total_Value"].sum()
 
-            # Fetch daily historical close prices via yfinance for the timeline chart
+            # Fetch historical close prices for NSE and BSE via yfinance
             for _, row in stocks_df.iterrows():
                 ticker = str(row["Ticker"]).strip()
-                yf_ticker = (
-                    f"{ticker}.NS" if not ticker.endswith((".NS", ".BO")) else ticker
-                )
+                exchange = (
+                    str(row.get("Exchange", "NSE")).strip().upper()
+                )  # Defaults to NSE
+
+                # Auto-append correct extension for yfinance (.NS or .BO)
+                if ticker.endswith(".NS") or ticker.endswith(".BO"):
+                    yf_ticker = ticker
+                elif exchange in ["BSE", "BO"]:
+                    yf_ticker = f"{ticker}.BO"
+                else:
+                    yf_ticker = f"{ticker}.NS"
+
                 shares = float(row["Shares"])
+
                 try:
                     hist_data = yf.Ticker(yf_ticker).history(
                         start=START_HIST_DATE
@@ -156,8 +166,8 @@ if STOCKS_CSV:
                             "%Y-%m-%d"
                         )
                         daily_closing_wealth_df[ticker] = daily_stock_val
-                except Exception:
-                    pass
+                except Exception as e:
+                    st.sidebar.warning(f"Could not load data for {yf_ticker}")
 
             if not daily_closing_wealth_df.empty:
                 daily_wealth_series = (
@@ -238,7 +248,7 @@ tab_overview, tab_stocks, tab_bonds, tab_income = st.tabs(
 
 # TAB 1: OVERALL SUMMARY
 with tab_overview:
-    # 1. Day-by-Day Family Wealth Line Chart
+    # 1. Day-by-Day Family Wealth Growth Line Chart
     st.subheader("📈 Day-by-Day Family Wealth Growth (Daily Closing Prices)")
 
     if not daily_wealth_series.empty:
@@ -260,7 +270,6 @@ with tab_overview:
 
         # Day-by-Day Wealth Numbers Expander
         with st.expander("📄 View Day-by-Day Wealth Breakdown Numbers"):
-            # Detailed breakdown table combining stocks history + FDs/Bonds
             detailed_daily_df = daily_closing_wealth_df.copy()
             detailed_daily_df["FDs & Bonds (₹)"] = total_bonds_val
             detailed_daily_df["Total Net Worth (₹)"] = daily_wealth_series
@@ -338,6 +347,7 @@ with tab_stocks:
         st.subheader("📋 Active Stock Holdings Table")
         display_cols = [
             "Ticker",
+            "Exchange",
             "Shares",
             "Buy_Price",
             "Current_Price",
